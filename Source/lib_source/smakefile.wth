@@ -1,0 +1,21 @@
+FROM     StartUp.o
+         LibInit.o
+         libbases.o
+         amihttp_funcs.o
+         ht_alloc.o
+         ht_error.o
+         ht_ssl.o
+         ht_transport.o
+         ht_pool.o
+         ht_url.o
+         ht_http.o
+         httpcch.o
+         session.o
+         transaction.o
+         connection.o
+         url_lvo.o
+         cookie.o
+LIB      LIB:sc.lib LIB:amiga.lib
+SC SD ND
+NODEBUG
+TO       amihttp.library

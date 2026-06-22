@@ -1,0 +1,30 @@
+#
+# Examples/smakefile - build AGet test program
+#
+# Prerequisite: install amihttp.library and headers (Source/lib_source smake install)
+#
+
+CC      = sc
+LD      = slink
+RM      = delete force quiet
+
+TARGET  = AGet
+
+all: $(TARGET)
+
+rebuild: clean all
+
+$(TARGET): AGet.o libbases.o smakefile.wth
+	$(LD) WITH smakefile.wth
+
+AGet.o: AGet.c
+	$(CC) AGet.c to AGet.o
+
+libbases.o: libbases.c
+	$(CC) libbases.c to libbases.o
+
+clean:
+	-$(RM) AGet.o
+	-$(RM) libbases.o
+	-$(RM) $(TARGET)
+	-$(RM) $(TARGET).info

@@ -1,0 +1,95 @@
+#
+# Source/lib_source/smakefile - amihttp.library
+#
+
+CC      = sc
+LD      = slink
+RM      = delete force quiet
+
+# SAS/C options for AmiSSL / OpenSSL headers (large pp buffer, long identifiers)
+SCSSL   = idir=netinclude: idir=sslinclude: MemorySize=h ppbuf=32768 IdentifierLength=100 IGNORE=101 IGNORE=63 IGNORE=84
+
+TARGET  = amihttp.library
+BUILD_H = private/ht_build.h
+
+OBJS    = StartUp.o LibInit.o libbases.o amihttp_funcs.o \
+          ht_alloc.o ht_error.o ht_ssl.o ht_transport.o ht_pool.o \
+          ht_url.o ht_http.o httpcch.o \
+          session.o transaction.o connection.o url_lvo.o cookie.o
+
+all: $(TARGET)
+
+rebuild: clean all
+
+$(TARGET): $(OBJS) smakefile.wth $(BUILD_H)
+	$(LD) WITH smakefile.wth WITH LIB:utillib.with
+
+StartUp.o: StartUp.c $(BUILD_H) amihttp_funcs.h private/ht_internal.h
+	$(CC) StartUp.c
+
+LibInit.o: LibInit.c $(BUILD_H) private/ht_internal.h
+	$(CC) LibInit.c
+
+libbases.o: libbases.c
+	$(CC) libbases.c
+
+amihttp_funcs.o: amihttp_funcs.c amihttp_funcs.h private/ht_internal.h
+	$(CC) amihttp_funcs.c
+
+ht_alloc.o: ht_alloc.c private/ht_internal.h
+	$(CC) ht_alloc.c
+
+ht_error.o: ht_error.c private/ht_internal.h
+	$(CC) ht_error.c
+
+ht_ssl.o: ht_ssl.c private/ht_internal.h
+	$(CC) $(SCSSL) ht_ssl.c to ht_ssl.o
+
+ht_transport.o: ht_transport.c private/ht_internal.h
+	$(CC) ht_transport.c
+
+ht_pool.o: ht_pool.c private/ht_internal.h
+	$(CC) ht_pool.c
+
+ht_url.o: ht_url.c private/ht_internal.h
+	$(CC) ht_url.c
+
+ht_http.o: ht_http.c private/ht_internal.h
+	$(CC) ht_http.c
+
+httpcch.o: httpcch.c
+	$(CC) httpcch.c
+
+session.o: session.c amihttp_funcs.h private/ht_internal.h
+	$(CC) session.c
+
+transaction.o: transaction.c amihttp_funcs.h private/ht_internal.h
+	$(CC) transaction.c
+
+connection.o: connection.c amihttp_funcs.h private/ht_internal.h
+	$(CC) connection.c
+
+url_lvo.o: url_lvo.c amihttp_funcs.h private/ht_internal.h
+	$(CC) url_lvo.c
+
+cookie.o: cookie.c amihttp_funcs.h private/ht_internal.h
+	$(CC) cookie.c
+
+release:
+	Copy $(TARGET) //SYS/Libs/$(TARGET)
+
+install:
+	Copy $(TARGET) LIBS:$(TARGET)
+	avail flush
+
+headers:
+	Copy clone /include/libraries/amihttp.h //SDK/Include_h/libraries/amihttp.h
+	Copy clone /include/amihttp/amihttpbase.h //SDK/Include_h/amihttp/amihttpbase.h
+	Copy clone /include/proto/amihttp.h //SDK/Include_h/proto/amihttp.h
+	Copy clone /include/clib/amihttp_protos.h //SDK/Include_h/clib/amihttp_protos.h
+	Copy clone /include/pragmas/amihttp_pragmas.h //SDK/Include_h/pragmas/amihttp_pragmas.h
+
+clean:
+	-$(RM) \#?.o
+	-$(RM) $(TARGET)
+	-$(RM) $(TARGET).info
