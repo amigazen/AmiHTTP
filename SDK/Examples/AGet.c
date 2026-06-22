@@ -4,9 +4,20 @@
  *
  * AGet.c - wget-style HTTP/HTTPS client for AmigaOS (amihttp.library).
  *
- * ReadArgs template:
- *   URL=FROM/K,TO/K,USERAGENT/K,HEADER/K,HEAD/S,
- *   NOREDIR/S,ASYNC/S,VERBOSE/S,QUIET/S,TEST/S,COOKIEFILE/K
+ * ReadArgs template (must match ag_usage_msg):
+ *   URL,TO/K,USERAGENT/K,HEADER/K,HEAD/S,NOREDIR/S,ASYNC/S,
+ *   VERBOSE/S,QUIET/S,TEST/S,COOKIEFILE/K
+ *
+ * Output routing (AmigaDOS):
+ *   - Response body  -> stdout, or TO/K file when given
+ *   - Status/errors  -> stderr (ErrorOutput), never mixed into body stream
+ *
+ * Modes (QUIET and VERBOSE are mutually exclusive; TEST implies VERBOSE):
+ *   Default  - one-line HTTP status on stderr; TLS cert summary for https;
+ *              body to stdout or TO/K
+ *   QUIET/S  - body (or TO file) only; stderr used for errors only
+ *   VERBOSE/S- step-by-step amihttp API trace on stderr
+ *   TEST/S   - VERBOSE plus Tier0/URL/cookie/Tier3 API smoke tests, then fetch
  */
 
 #define __USE_SYSBASE
@@ -17,6 +28,7 @@
 #include <dos/dos.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdio.h>
 
 #include <proto/dos.h>
 #include <proto/exec.h>
@@ -65,6 +77,10 @@ static BOOL   ag_verbose;
 static BOOL   ag_quiet;
 static BOOL   ag_test_mode;
 
+#define AG_EMPTY_STR    ((STRPTR)"")
+
+static VOID ag_printf(STRPTR fmt, ...);
+
 static VOID
 ag_flush_msg(void)
 {
@@ -89,12 +105,41 @@ ag_printf(STRPTR fmt, ...)
     LONG n;
 
     va_start(ap, fmt);
-    vsprintf(buf, fmt, ap);
+    vsprintf(buf, (const char *)fmt, ap);
     va_end(ap);
     n = (LONG)strlen(buf);
     if (n > 0 && ag_msgfh != 0) {
         Write(ag_msgfh, buf, n);
     }
+}
+
+/*
+ * ag_msgfh  - status, TLS, errors (stderr when available)
+ * ag_bodyfh - entity body (stdout or TO/K file)
+ * Returns 0 or ERROR_HTTP_WRITE_FAILED if TO/K cannot be created.
+ */
+static LONG
+ag_open_output(struct AGetArgs *args, BPTR *outfh, BOOL *close_out)
+{
+    ag_msgfh = (BPTR)ErrorOutput();
+    if (ag_msgfh == 0) {
+        ag_msgfh = Output();
+    }
+    *outfh = 0;
+    *close_out = FALSE;
+    if (args->TO != NULL && args->TO[0] != '\0') {
+        *outfh = Open(args->TO, MODE_NEWFILE);
+        if (*outfh == 0) {
+            ag_printf("AGet: cannot create output file \"%s\"\n", args->TO);
+            ag_bodyfh = 0;
+            return ERROR_HTTP_WRITE_FAILED;
+        }
+        *close_out = TRUE;
+        ag_bodyfh = *outfh;
+    } else {
+        ag_bodyfh = Output();
+    }
+    return 0;
 }
 
 static VOID
@@ -223,14 +268,14 @@ ag_log_parsed_url(struct ParsedUrl *pu)
         return;
     }
     ag_printf("AGet:     scheme=\"%s\" host=\"%s\" port=%ld path=\"%s\"\n",
-        pu->pu_Scheme ? pu->pu_Scheme : "",
-        pu->pu_Host ? pu->pu_Host : "",
+        pu->pu_Scheme ? pu->pu_Scheme : AG_EMPTY_STR,
+        pu->pu_Host ? pu->pu_Host : AG_EMPTY_STR,
         (LONG)pu->pu_Port,
-        pu->pu_Path ? pu->pu_Path : "");
+        pu->pu_Path ? pu->pu_Path : AG_EMPTY_STR);
     ag_printf("AGet:     query=\"%s\" user=\"%s\" secure=%s\n",
-        pu->pu_Query ? pu->pu_Query : "",
-        pu->pu_User ? pu->pu_User : "",
-        pu->pu_IsSecure ? "YES" : "NO");
+        pu->pu_Query ? pu->pu_Query : AG_EMPTY_STR,
+        pu->pu_User ? pu->pu_User : AG_EMPTY_STR,
+        pu->pu_IsSecure ? (STRPTR)"YES" : (STRPTR)"NO");
     ag_flush_msg();
 }
 
@@ -313,6 +358,9 @@ ag_log_peer_cert(struct HttpTransaction *txn, STRPTR url)
     struct ParsedUrl *pu;
     LONG rv;
 
+    if (ag_quiet && !ag_verbose) {
+        return;
+    }
     pu = ParseHttpUrl(url);
     if (pu == NULL || !pu->pu_IsSecure) {
         if (pu != NULL) {
@@ -616,11 +664,54 @@ ag_read_body(struct HttpTransaction *txn, LONG expect_cl, LONG *out_total)
     if (out_total != NULL) {
         *out_total = body_total;
     }
-    if (ag_bodyfh == Output() && body_total > 0) {
-        Write(ag_bodyfh, (APTR)"\n", 1);
-        ag_flush_body();
-    }
     return 0;
+}
+
+static VOID
+ag_log_status_line(LONG status, LONG clen, BOOL head)
+{
+    if (ag_quiet && !ag_verbose) {
+        return;
+    }
+    ag_printf("AGet: HTTP %ld", status);
+    if (head) {
+        ag_printf(" (HEAD)");
+    }
+    if (clen >= 0) {
+        ag_printf(" Content-Length=%ld", clen);
+    }
+    ag_printf("\n");
+    ag_flush_msg();
+}
+
+static VOID
+ag_log_head_summary(struct HttpTransaction *txn)
+{
+    STRPTR sl;
+    STRPTR ctype;
+    STRPTR clen_hdr;
+    STRPTR enc;
+
+    if (ag_quiet && !ag_verbose) {
+        return;
+    }
+    sl = HttpTransactionGetStatusLine(txn);
+    if (sl != NULL) {
+        ag_printf("AGet: %s\n", sl);
+    }
+    ctype = HttpTransactionRespHeader(txn, (STRPTR)"Content-Type");
+    if (ctype != NULL) {
+        ag_printf("AGet: Content-Type: %s\n", ctype);
+    }
+    clen_hdr = HttpTransactionRespHeader(txn, (STRPTR)"Content-Length");
+    if (clen_hdr != NULL) {
+        ag_printf("AGet: Content-Length: %s\n", clen_hdr);
+    }
+    enc = HttpTransactionRespHeader(txn, (STRPTR)"Content-Encoding");
+    if (enc != NULL) {
+        ag_printf("AGet: Content-Encoding: %s\n", enc);
+    }
+    ag_flush_msg();
 }
 
 static LONG
@@ -656,41 +747,18 @@ ag_download(struct AGetArgs *args)
 
     user_agent = args->USERAGENT;
     if (user_agent == NULL || user_agent[0] == '\0') {
-        user_agent = (STRPTR)"AGet/3.0 (amihttp)";
+        user_agent = (STRPTR)"AGet/1.0 (amihttp)";
     }
 
-    if (!ag_verbose && !ag_test_mode) {
-        ag_quiet = TRUE;
-    }
-    if (args->QUIET) {
-        ag_quiet = TRUE;
-    }
-    if (args->VERBOSE) {
-        ag_verbose = TRUE;
-        ag_quiet = FALSE;
-    }
-
-    ag_msgfh = ag_quiet ? (BPTR)ErrorOutput() : Output();
-    if (ag_msgfh == 0) {
-        ag_msgfh = Output();
-    }
-
-    if (args->TO != NULL) {
-        outfh = Open(args->TO, MODE_NEWFILE);
-        if (outfh == 0) {
-            ag_printf("AGet: cannot open output file \"%s\"\n", args->TO);
-            return ERROR_HTTP_WRITE_FAILED;
-        }
-        close_out = TRUE;
-        ag_bodyfh = outfh;
-    } else {
-        ag_bodyfh = Output();
+    err = ag_open_output(args, &outfh, &close_out);
+    if (err != 0) {
+        return err;
     }
 
     if (ag_verbose || ag_test_mode) {
         ag_printf("AGet: url=\"%s\" to=%s ua=\"%s\"\n",
             args->URL,
-            args->TO ? args->TO : "(stdout)",
+            args->TO ? args->TO : (STRPTR)"(stdout)",
             user_agent);
         ag_flush_msg();
     }
@@ -806,6 +874,7 @@ ag_download(struct AGetArgs *args)
     }
 
     performed = FALSE;
+    wait_iter = 0;
     if (args->ASYNC) {
         rv = HttpTransactionPerformAsync(txn);
         if (!rv) {
@@ -837,24 +906,30 @@ ag_download(struct AGetArgs *args)
     }
 
     status = HttpTransactionGetStatusCode(txn);
+    clen = HttpTransactionGetContentLength(txn);
     ag_log_peer_cert(txn, args->URL);
 
     if (ag_verbose || ag_test_mode) {
         ag_printf("AGet: --- Response ---\n");
         ag_log_txn_getters(txn, "post-perform getters");
-    } else if (!args->HEAD) {
-        ag_printf("AGet: %ld", status);
-        clen = HttpTransactionGetContentLength(txn);
-        if (clen >= 0) {
-            ag_printf(" (%ld bytes)", clen);
-        }
-        ag_printf("\n");
-        ag_flush_msg();
+    } else {
+        ag_log_status_line(status, clen, args->HEAD ? TRUE : FALSE);
     }
 
     if (status >= 300 && status < 400) {
-        if (ag_verbose || ag_test_mode) {
-            ag_printf("AGet: redirect status=%ld\n", status);
+        if (!ag_quiet || ag_verbose) {
+            STRPTR loc;
+
+            loc = HttpTransactionGetRedirectLocation(txn);
+            ag_printf("AGet: redirect %ld", status);
+            if (loc != NULL && loc[0] != '\0') {
+                ag_printf(" -> %s", loc);
+            }
+            if (args->NOREDIR) {
+                ag_printf(" (NOREDIR)");
+            }
+            ag_printf("\n");
+            ag_flush_msg();
         }
         err = 0;
         goto dl_cleanup;
@@ -868,12 +943,13 @@ ag_download(struct AGetArgs *args)
     if (args->HEAD) {
         if (ag_verbose || ag_test_mode) {
             ag_printf("AGet: HEAD complete status=%ld\n", status);
+        } else {
+            ag_log_head_summary(txn);
         }
         err = 0;
         goto dl_cleanup;
     }
 
-    clen = HttpTransactionGetContentLength(txn);
     err = ag_read_body(txn, clen, &body_total);
     if (err != 0) {
         ag_log_fail("ReadBody", err);
@@ -887,6 +963,13 @@ ag_download(struct AGetArgs *args)
             ag_printf(", Content-Length=%ld", clen);
         }
         ag_printf(") ---\n");
+        ag_flush_msg();
+    } else if (!ag_quiet) {
+        ag_printf("AGet: received %ld bytes", body_total);
+        if (args->TO != NULL && args->TO[0] != '\0') {
+            ag_printf(" -> %s", args->TO);
+        }
+        ag_printf("\n");
         ag_flush_msg();
     }
 
@@ -921,19 +1004,43 @@ ag_usage(void)
 {
     BPTR fh;
     static const char ag_usage_msg[] =
-        "AGet - wget-style client for amihttp.library\n"
-        "Usage: AGet     \"URL=FROM,TO/K,USERAGENT/K,HEADER/K,HEAD/S,NOREDIR/S,ASYNC/S,VERBOSE/S,QUIET/S,TEST/S,COOKIEFILE/K\"\n"
-        "  URL=FROM         URL to fetch (required)\n"
-        "  TO/K             write body to file (default stdout)\n"
-        "  USERAGENT/K      User-Agent header\n"
-        "  HEADER/K         extra request header (repeatable)\n"
-        "  HEAD/S           HTTP HEAD request\n"
-        "  NOREDIR/S        do not follow redirects\n"
-        "  ASYNC/S          perform asynchronously\n"
-        "  VERBOSE/S        diagnostic output (stderr if quiet)\n"
-        "  QUIET/S          status on stderr only, body on stdout\n"
-        "  TEST/S           run full API exercise\n"
-        "  COOKIEFILE/K     load/save Netscape cookie jar\n";
+        "AGet - HTTP/HTTPS fetch client (amihttp.library)\n"
+        "\n"
+        "Usage:\n"
+        "  AGet URL=<url> [options]\n"
+        "\n"
+        "ReadArgs template:\n"
+        "  URL,TO/K,USERAGENT/K,HEADER/K,HEAD/S,NOREDIR/S,ASYNC/S,"
+        "VERBOSE/S,QUIET/S,TEST/S,COOKIEFILE/K\n"
+        "\n"
+        "Required:\n"
+        "  URL              http:// or https:// URL to fetch\n"
+        "\n"
+        "Output destination:\n"
+        "  TO/K             write decoded body to this file (default: stdout)\n"
+        "\n"
+        "Request options:\n"
+        "  USERAGENT/K      User-Agent request header (default: AGet/1.0)\n"
+        "  HEADER/K         extra header, repeatable; use \"Name: value\" form\n"
+        "  HEAD/S           send HEAD (headers only, no body read)\n"
+        "  NOREDIR/S        do not follow 3xx Location redirects\n"
+        "  COOKIEFILE/K     load cookies before request; save jar after success\n"
+        "\n"
+        "Behaviour:\n"
+        "  ASYNC/S          HttpTransactionPerformAsync + WaitHttpTransaction\n"
+        "\n"
+        "Output modes (stderr vs stdout — body never mixed with messages):\n"
+        "  (default)        stderr: HTTP status line + TLS cert (https)\n"
+        "                   stdout: response body (or TO/K file)\n"
+        "  QUIET/S          stderr: errors only; stdout/file: body only\n"
+        "  VERBOSE/S        stderr: full amihttp API step trace\n"
+        "  TEST/S           VERBOSE + Tier0/URL/cookie/Tier3 API smoke tests\n"
+        "\n"
+        "Examples:\n"
+        "  AGet URL=https://www.amigazen.com\n"
+        "  AGet URL=http://example.com TO=RAM:page.html QUIET\n"
+        "  AGet URL=https://host/ HEAD VERBOSE\n"
+        "  AGet URL=https://host/ TEST\n";
 
     fh = Output();
     Write(fh, (APTR)ag_usage_msg, (ULONG)(sizeof(ag_usage_msg) - 1));
@@ -967,9 +1074,15 @@ main(int argc, char **argv)
         return 20;
     }
 
+    ag_verbose = FALSE;
+    ag_quiet = FALSE;
     if (args.TEST) {
         ag_test_mode = TRUE;
         ag_verbose = TRUE;
+    } else if (args.VERBOSE) {
+        ag_verbose = TRUE;
+    } else if (args.QUIET) {
+        ag_quiet = TRUE;
     }
 
     err = ag_download(&args);
@@ -980,7 +1093,7 @@ main(int argc, char **argv)
         if (ag_msgfh == 0) {
             ag_msgfh = Output();
         }
-        ag_printf("AGet: FAILED err=%ld\n", err);
+        ag_log_fail("AGet", err);
         return (err > 0 && err < 256) ? err : 20;
     }
     if (ag_verbose || ag_test_mode) {
