@@ -265,6 +265,7 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
     struct ParsedUrl pu;
     STRPTR method;
     STRPTR path;
+    STRPTR cookie_hdr;
     ULONG cap;
     ULONG used;
     UBYTE *buf;
@@ -339,6 +340,54 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
         sprintf((char *)line, "Referer: %s\r\n", txn->ht_Referer);
         strcat((char *)buf, line);
     }
+    if (txn->ht_Session != NULL && txn->ht_Session->hs_AcceptEncoding != NULL &&
+        txn->ht_Session->hs_AcceptEncoding[0] != '\0') {
+        sprintf((char *)line, "Accept-Encoding: %s\r\n",
+            txn->ht_Session->hs_AcceptEncoding);
+        strcat((char *)buf, line);
+    }
+    if (txn->ht_RangeStart >= 0) {
+        if (txn->ht_RangeEnd >= txn->ht_RangeStart) {
+            sprintf((char *)line, "Range: bytes=%ld-%ld\r\n",
+                txn->ht_RangeStart, txn->ht_RangeEnd);
+        } else {
+            sprintf((char *)line, "Range: bytes=%ld-\r\n", txn->ht_RangeStart);
+        }
+        strcat((char *)buf, line);
+    }
+    if (txn->ht_IfModifiedSince != NULL && txn->ht_IfModifiedSince[0] != '\0') {
+        sprintf((char *)line, "If-Modified-Since: %s\r\n",
+            txn->ht_IfModifiedSince);
+        strcat((char *)buf, line);
+    }
+    if (txn->ht_IfNoneMatch != NULL && txn->ht_IfNoneMatch[0] != '\0') {
+        sprintf((char *)line, "If-None-Match: %s\r\n", txn->ht_IfNoneMatch);
+        strcat((char *)buf, line);
+    }
+    if (txn->ht_NoCache) {
+        strcat((char *)buf, "Cache-Control: no-cache\r\n");
+        strcat((char *)buf, "Pragma: no-cache\r\n");
+    }
+    if (txn->ht_Session != NULL && txn->ht_Session->hs_CookieJar != NULL) {
+        cookie_hdr = ht_cookie_header_for_url(txn->ht_Session->hs_CookieJar,
+            txn->ht_Url, pu.pu_IsSecure);
+        if (cookie_hdr != NULL && cookie_hdr[0] != '\0') {
+            sprintf((char *)line, "Cookie: %s\r\n", cookie_hdr);
+            strcat((char *)buf, line);
+        }
+        if (cookie_hdr != NULL) {
+            ht_free(cookie_hdr);
+        }
+    }
+    if (txn->ht_BasicAuth != NULL && txn->ht_BasicAuth[0] != '\0') {
+        sprintf((char *)line, "Authorization: Basic %s\r\n", txn->ht_BasicAuth);
+        strcat((char *)buf, line);
+    }
+    if (txn->ht_BasicProxyAuth != NULL && txn->ht_BasicProxyAuth[0] != '\0') {
+        sprintf((char *)line, "Proxy-Authorization: Basic %s\r\n",
+            txn->ht_BasicProxyAuth);
+        strcat((char *)buf, line);
+    }
     if (txn->ht_PostBody != NULL && txn->ht_PostLength > 0) {
         sprintf((char *)line, "Content-Length: %lu\r\n", txn->ht_PostLength);
         strcat((char *)buf, line);
@@ -403,6 +452,7 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
     STRPTR ce_val;
     STRPTR loc_val;
     STRPTR cc_val;
+    STRPTR auth_val;
     ULONG header_count;
 
     if (txn == NULL || txn->ht_Conn == NULL) {
@@ -523,6 +573,21 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
         struct Http_cc_accum line_cc;
         Http_cc_parse(cc_val, &line_cc);
         Http_cc_merge(&txn->ht_CcAccum, &line_cc);
+    }
+    if (code == 401) {
+        auth_val = ht_header_value(txn, (STRPTR)"WWW-Authenticate");
+        if (txn->ht_AuthRealm != NULL) {
+            ht_free(txn->ht_AuthRealm);
+            txn->ht_AuthRealm = NULL;
+        }
+        txn->ht_AuthRealm = ht_auth_parse_basic_realm(auth_val);
+    } else if (code == 407) {
+        auth_val = ht_header_value(txn, (STRPTR)"Proxy-Authenticate");
+        if (txn->ht_AuthRealm != NULL) {
+            ht_free(txn->ht_AuthRealm);
+            txn->ht_AuthRealm = NULL;
+        }
+        txn->ht_AuthRealm = ht_auth_parse_basic_realm(auth_val);
     }
     txn->ht_Flags |= HTF_HEADERS_DONE;
     {

@@ -129,6 +129,15 @@ ht_txn_free_fields(struct HttpTransaction *txn)
     if (txn->ht_IfNoneMatch) {
         ht_free(txn->ht_IfNoneMatch);
     }
+    if (txn->ht_AuthRealm) {
+        ht_free(txn->ht_AuthRealm);
+    }
+    if (txn->ht_BasicAuth) {
+        ht_free(txn->ht_BasicAuth);
+    }
+    if (txn->ht_BasicProxyAuth) {
+        ht_free(txn->ht_BasicProxyAuth);
+    }
     if (txn->ht_StatusLine) {
         ht_free(txn->ht_StatusLine);
     }
@@ -139,6 +148,70 @@ ht_txn_free_fields(struct HttpTransaction *txn)
         ht_free(txn->ht_DecodeBuf);
     }
     ht_txn_free_peer_cert(txn);
+}
+
+static VOID
+ht_txn_clear_resp_state(struct HttpTransaction *txn)
+{
+    struct HttpHeader *hh;
+    struct HttpHeader *hnext;
+
+    if (txn == NULL) {
+        return;
+    }
+    if (txn->ht_StatusLine) {
+        ht_free(txn->ht_StatusLine);
+        txn->ht_StatusLine = NULL;
+    }
+    if (txn->ht_RedirectUrl) {
+        ht_free(txn->ht_RedirectUrl);
+        txn->ht_RedirectUrl = NULL;
+    }
+    for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
+         hh != NULL && hh->hh_Node.ln_Succ != NULL;
+         hh = hnext) {
+        hnext = (struct HttpHeader *)hh->hh_Node.ln_Succ;
+        Remove(&hh->hh_Node);
+        if (hh->hh_Name) {
+            ht_free(hh->hh_Name);
+        }
+        if (hh->hh_Value) {
+            ht_free(hh->hh_Value);
+        }
+        ht_free(hh);
+    }
+    if (txn->ht_DecodeBuf) {
+        ht_free(txn->ht_DecodeBuf);
+        txn->ht_DecodeBuf = NULL;
+    }
+    txn->ht_DecodeLen = 0;
+    txn->ht_DecodePos = 0;
+    txn->ht_DecodeCap = 0;
+    txn->ht_ChunkRemain = 0;
+    txn->ht_BytesReceived = 0;
+    txn->ht_ContentLength = -1;
+    txn->ht_StatusCode = 0;
+    txn->ht_Flags = 0;
+    txn->ht_Complete = FALSE;
+    Http_cc_reset_accum(&txn->ht_CcAccum);
+    ht_txn_free_peer_cert(txn);
+}
+
+static VOID
+ht_txn_switch_to_get(struct HttpTransaction *txn)
+{
+    if (txn == NULL) {
+        return;
+    }
+    if (txn->ht_Method) {
+        ht_free(txn->ht_Method);
+        txn->ht_Method = NULL;
+    }
+    if (txn->ht_PostBody) {
+        ht_free(txn->ht_PostBody);
+        txn->ht_PostBody = NULL;
+    }
+    txn->ht_PostLength = 0;
 }
 
 static LONG
@@ -186,6 +259,9 @@ ht_txn_perform_once(struct HttpTransaction *txn)
     }
     if (txn->ht_Conn != NULL && txn->ht_Conn->hc_IsSsl) {
         ht_txn_copy_peer_cert(txn, txn->ht_Conn);
+    }
+    if (txn->ht_Session != NULL && txn->ht_Session->hs_CookieJar != NULL) {
+        ht_cookie_ingest_headers(txn->ht_Session->hs_CookieJar, txn);
     }
     /*
      * Redirect hops close the socket without Readdata().
@@ -434,6 +510,38 @@ __ASM__ __SAVE_DS__ HttpTransactionPerform(
             ht_set_txn_error(txn, rc);
             return ht_lvo_status(rc);
         }
+        if (txn->ht_StatusCode == 401 && txn->ht_Session != NULL &&
+            txn->ht_Session->hs_Credentials != NULL &&
+            txn->ht_RetryAuth && !txn->ht_AuthTried) {
+            if (txn->ht_BasicAuth) {
+                ht_free(txn->ht_BasicAuth);
+            }
+            txn->ht_BasicAuth = ht_auth_basic_encode(
+                txn->ht_Session->hs_Credentials);
+            if (txn->ht_BasicAuth == NULL) {
+                ht_set_txn_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
+                return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
+            }
+            txn->ht_AuthTried = TRUE;
+            ht_txn_clear_resp_state(txn);
+            continue;
+        }
+        if (txn->ht_StatusCode == 407 && txn->ht_Session != NULL &&
+            txn->ht_Session->hs_ProxyAuth != NULL &&
+            !txn->ht_ProxyAuthTried) {
+            if (txn->ht_BasicProxyAuth) {
+                ht_free(txn->ht_BasicProxyAuth);
+            }
+            txn->ht_BasicProxyAuth = ht_auth_basic_encode(
+                txn->ht_Session->hs_ProxyAuth);
+            if (txn->ht_BasicProxyAuth == NULL) {
+                ht_set_txn_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
+                return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
+            }
+            txn->ht_ProxyAuthTried = TRUE;
+            ht_txn_clear_resp_state(txn);
+            continue;
+        }
         if (txn->ht_StatusCode < 300 || txn->ht_StatusCode >= 400) {
             break;
         }
@@ -448,7 +556,7 @@ __ASM__ __SAVE_DS__ HttpTransactionPerform(
             ht_set_txn_error(txn, ERROR_HTTP_TOO_MANY_REDIRECTS);
             return ht_lvo_status(ERROR_HTTP_TOO_MANY_REDIRECTS);
         }
-        newurl = ht_strdup(txn->ht_RedirectUrl);
+        newurl = ht_join_uri(txn->ht_Url, txn->ht_RedirectUrl);
         if (newurl == NULL) {
             ht_set_txn_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
             return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
@@ -457,43 +565,11 @@ __ASM__ __SAVE_DS__ HttpTransactionPerform(
             ht_free(txn->ht_Url);
         }
         txn->ht_Url = newurl;
-        if (txn->ht_StatusLine) {
-            ht_free(txn->ht_StatusLine);
-            txn->ht_StatusLine = NULL;
+        if (txn->ht_StatusCode == 301 || txn->ht_StatusCode == 302 ||
+            txn->ht_StatusCode == 303) {
+            ht_txn_switch_to_get(txn);
         }
-        if (txn->ht_RedirectUrl) {
-            ht_free(txn->ht_RedirectUrl);
-            txn->ht_RedirectUrl = NULL;
-        }
-        {
-            struct HttpHeader *hh;
-            struct HttpHeader *hnext;
-            for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
-                 hh != NULL && hh->hh_Node.ln_Succ != NULL;
-                 hh = hnext) {
-                hnext = (struct HttpHeader *)hh->hh_Node.ln_Succ;
-                Remove(&hh->hh_Node);
-                if (hh->hh_Name) {
-                    ht_free(hh->hh_Name);
-                }
-                if (hh->hh_Value) {
-                    ht_free(hh->hh_Value);
-                }
-                ht_free(hh);
-            }
-        }
-        if (txn->ht_DecodeBuf) {
-            ht_free(txn->ht_DecodeBuf);
-            txn->ht_DecodeBuf = NULL;
-        }
-        txn->ht_DecodeLen = 0;
-        txn->ht_DecodePos = 0;
-        txn->ht_DecodeCap = 0;
-        txn->ht_ChunkRemain = 0;
-        txn->ht_BytesReceived = 0;
-        txn->ht_ContentLength = -1;
-        txn->ht_Flags = 0;
-        txn->ht_Complete = FALSE;
+        ht_txn_clear_resp_state(txn);
     }
     ht_set_txn_error(txn, 0);
     return 1;

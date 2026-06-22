@@ -134,6 +134,11 @@ struct HttpTransaction
     BOOL                ht_NoCache;
     BOOL                ht_NoBody;
     BOOL                ht_RetryAuth;
+    STRPTR              ht_AuthRealm;
+    STRPTR              ht_BasicAuth;
+    STRPTR              ht_BasicProxyAuth;
+    BOOL                ht_AuthTried;
+    BOOL                ht_ProxyAuthTried;
     struct List         ht_ReqHeaders;
     STRPTR              ht_StatusLine;
     LONG                ht_StatusCode;
@@ -244,6 +249,20 @@ STRPTR ht_uri_parent_part(STRPTR url);
 STRPTR ht_uri_authority_part(STRPTR url);
 STRPTR ht_join_uri(STRPTR base_url, STRPTR relative_url);
 VOID ht_peer_cert_free_fields(struct HttpSslPeerCert *cert);
+
+/* ht_auth.c */
+STRPTR ht_auth_basic_encode(STRPTR userpass);
+STRPTR ht_auth_parse_basic_realm(STRPTR value);
+
+/* ht_cookie.c */
+VOID ht_cookie_jar_clear(struct HttpCookieJar *jar);
+VOID ht_cookie_jar_trim(struct HttpCookieJar *jar, ULONG max_count);
+LONG ht_cookie_store_line(struct HttpCookieJar *jar, STRPTR url, STRPTR spec,
+    BOOL from_response);
+STRPTR ht_cookie_header_for_url(struct HttpCookieJar *jar, STRPTR url,
+    BOOL secure);
+VOID ht_cookie_ingest_headers(struct HttpCookieJar *jar,
+    struct HttpTransaction *txn);
 
 /* ht_http.c */
 LONG ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf,

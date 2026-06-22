@@ -8,6 +8,8 @@ FROM     StartUp.o
          ht_transport.o
          ht_pool.o
          ht_url.o
+         ht_auth.o
+         ht_cookie.o
          ht_http.o
          httpcch.o
          session.o

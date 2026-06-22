@@ -21,6 +21,7 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/timer.h>
+#include <proto/alib.h>
 
 #include <amihttp/amihttpbase.h>
 #include <libraries/amihttp.h>

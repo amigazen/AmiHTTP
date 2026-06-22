@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright 2026 amigazen project
  *
- * cookie.c - Basic cookie jar (in-memory store)
+ * cookie.c - Cookie jar LVOs (ht_cookie.c backend)
  */
 
 #define __USE_SYSBASE
@@ -20,12 +20,6 @@
 #include "compiler.h"
 #include "amihttp_funcs.h"
 #include "private/ht_internal.h"
-
-struct HttpCookieEntry
-{
-    struct Node hce_Node;
-    STRPTR      hce_Line;
-};
 
 struct HttpCookieJar *
 __ASM__ __SAVE_DS__ NewHttpCookieJar(void)
@@ -48,24 +42,10 @@ VOID
 __ASM__ __SAVE_DS__ DisposeHttpCookieJar(
     __REG__(a0, struct HttpCookieJar *jar))
 {
-    struct HttpCookieEntry *e;
-    struct HttpCookieEntry *next;
-
     if (jar == NULL || !ht_check_handle(jar->hj_Magic, HT_MAGIC_JAR)) {
         return;
     }
-    ObtainSemaphore(&jar->hj_Sema);
-    for (e = (struct HttpCookieEntry *)jar->hj_Cookies.lh_Head;
-         e != NULL && e->hce_Node.ln_Succ != NULL;
-         e = next) {
-        next = (struct HttpCookieEntry *)e->hce_Node.ln_Succ;
-        Remove(&e->hce_Node);
-        if (e->hce_Line) {
-            ht_free(e->hce_Line);
-        }
-        ht_free(e);
-    }
-    ReleaseSemaphore(&jar->hj_Sema);
+    ht_cookie_jar_clear(jar);
     jar->hj_Magic = 0;
     ht_free(jar);
 }
@@ -97,29 +77,14 @@ __ASM__ __SAVE_DS__ FlushHttpCookieJar(
     __REG__(a0, struct HttpCookieJar *jar),
     __REG__(d0, ULONG max_count))
 {
-    struct HttpCookieEntry *e;
-    struct HttpCookieEntry *next;
-    ULONG count;
-
     if (!ht_check_handle(jar ? jar->hj_Magic : 0, HT_MAGIC_JAR)) {
         return;
     }
-    ObtainSemaphore(&jar->hj_Sema);
-    count = 0;
-    for (e = (struct HttpCookieEntry *)jar->hj_Cookies.lh_Head;
-         e != NULL && e->hce_Node.ln_Succ != NULL;
-         e = next) {
-        next = (struct HttpCookieEntry *)e->hce_Node.ln_Succ;
-        count++;
-        if (max_count > 0 && count > max_count) {
-            Remove(&e->hce_Node);
-            if (e->hce_Line) {
-                ht_free(e->hce_Line);
-            }
-            ht_free(e);
-        }
+    if (max_count == 0) {
+        ht_cookie_jar_clear(jar);
+        return;
     }
-    ReleaseSemaphore(&jar->hj_Sema);
+    ht_cookie_jar_trim(jar, max_count);
 }
 
 LONG
@@ -127,27 +92,13 @@ __ASM__ __SAVE_DS__ SetHttpCookie(
     __REG__(a0, struct HttpCookieJar *jar),
     __REG__(a1, STRPTR cookie_line))
 {
-    struct HttpCookieEntry *e;
-
     if (!ht_check_handle(jar ? jar->hj_Magic : 0, HT_MAGIC_JAR)) {
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
     }
     if (cookie_line == NULL || cookie_line[0] == '\0') {
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
     }
-    e = (struct HttpCookieEntry *)ht_alloc(sizeof(struct HttpCookieEntry), MEMF_CLEAR);
-    if (e == NULL) {
-        return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
-    }
-    e->hce_Line = ht_strdup(cookie_line);
-    if (e->hce_Line == NULL) {
-        ht_free(e);
-        return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
-    }
-    ObtainSemaphore(&jar->hj_Sema);
-    AddTail(&jar->hj_Cookies, &e->hce_Node);
-    ReleaseSemaphore(&jar->hj_Sema);
-    return 1;
+    return ht_lvo_status(ht_cookie_store_line(jar, NULL, cookie_line, FALSE));
 }
 
 STRPTR
@@ -155,46 +106,21 @@ __ASM__ __SAVE_DS__ GetHttpCookieString(
     __REG__(a0, struct HttpCookieJar *jar),
     __REG__(a1, STRPTR url))
 {
-    struct HttpCookieEntry *e;
-    ULONG len;
-    STRPTR out;
-    STRPTR p;
+    struct ParsedUrl pu;
+    BOOL secure;
+    LONG rc;
 
     if (!ht_check_handle(jar ? jar->hj_Magic : 0, HT_MAGIC_JAR)) {
         return NULL;
     }
-    len = 0;
-    ObtainSemaphore(&jar->hj_Sema);
-    for (e = (struct HttpCookieEntry *)jar->hj_Cookies.lh_Head;
-         e != NULL && e->hce_Node.ln_Succ != NULL;
-         e = (struct HttpCookieEntry *)e->hce_Node.ln_Succ) {
-        if (e->hce_Line != NULL) {
-            len += (ULONG)strlen((char *)e->hce_Line) + 2;
-        }
-    }
-    if (len == 0) {
-        ReleaseSemaphore(&jar->hj_Sema);
+    if (url == NULL) {
         return ht_strdup((STRPTR)"");
     }
-    out = (STRPTR)ht_alloc(len, MEMF_CLEAR);
-    if (out == NULL) {
-        ReleaseSemaphore(&jar->hj_Sema);
-        ht_set_error(ERROR_HTTP_OUT_OF_MEMORY);
-        return NULL;
+    secure = FALSE;
+    rc = ht_url_parse(url, &pu);
+    if (rc == 0) {
+        secure = pu.pu_IsSecure;
+        ht_url_free_fields(&pu);
     }
-    p = out;
-    for (e = (struct HttpCookieEntry *)jar->hj_Cookies.lh_Head;
-         e != NULL && e->hce_Node.ln_Succ != NULL;
-         e = (struct HttpCookieEntry *)e->hce_Node.ln_Succ) {
-        if (e->hce_Line != NULL) {
-            if (p != out) {
-                *p++ = ';';
-                *p++ = ' ';
-            }
-            strcpy((char *)p, (char *)e->hce_Line);
-            p += strlen((char *)p);
-        }
-    }
-    ReleaseSemaphore(&jar->hj_Sema);
-    return out;
+    return ht_cookie_header_for_url(jar, url, secure);
 }

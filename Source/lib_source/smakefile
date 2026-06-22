@@ -14,7 +14,7 @@ BUILD_H = private/ht_build.h
 
 OBJS    = StartUp.o LibInit.o libbases.o amihttp_funcs.o \
           ht_alloc.o ht_error.o ht_ssl.o ht_transport.o ht_pool.o \
-          ht_url.o ht_http.o httpcch.o \
+          ht_url.o ht_http.o httpcch.o ht_auth.o ht_cookie.o\
           session.o transaction.o connection.o url_lvo.o cookie.o
 
 all: $(TARGET)
@@ -56,6 +56,12 @@ ht_url.o: ht_url.c private/ht_internal.h
 
 ht_http.o: ht_http.c private/ht_internal.h
 	$(CC) ht_http.c
+
+ht_auth.o: ht_auth.c private/ht_internal.h
+	$(CC) ht_auth.c
+
+ht_cookie.o: ht_cookie.c private/ht_internal.h
+	$(CC) ht_cookie.c
 
 httpcch.o: httpcch.c
 	$(CC) httpcch.c
