@@ -1179,8 +1179,18 @@ amihttp.library/WaitHttpTransaction
            struct HttpTiming *);
 
    FUNCTION
-       Fills struct HttpTiming (connect, TTFB, total milliseconds).  Fields
-       may be zero until timing instrumentation is complete.
+       Fills struct HttpTiming (connect, TTFB, total milliseconds) measured
+       with timer.device/GetSysTime() during HttpTransactionPerform and
+       HttpTransactionReadBody.
+
+       ht_ConnectMs accumulates non-pooled TCP (+ TLS) setup across redirect
+       hops; it is zero when an idle keep-alive socket is reused.
+
+       ht_TtfbMs is the interval from HttpTransactionPerform start to the
+       first response octet on the final hop.
+
+       ht_TotalMs runs from HttpTransactionPerform start to entity-body EOF,
+       or to the end of Perform when there is no body (HEAD, zero length).
 
    INPUTS
        txn    - HttpTransaction handle.

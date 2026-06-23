@@ -96,6 +96,44 @@ ht_current_seconds(void)
     return (ULONG)tv.tv_secs;
 }
 
+BOOL
+ht_timer_get_time(struct timeval *tv)
+{
+    if (tv == NULL) {
+        return FALSE;
+    }
+    if (!ht_ensure_timer()) {
+        return FALSE;
+    }
+    GetSysTime(tv);
+    return TRUE;
+}
+
+ULONG
+ht_timer_delta_ms(struct timeval *start, struct timeval *end)
+{
+    ULONG sec;
+    ULONG usec;
+
+    if (start == NULL || end == NULL) {
+        return 0UL;
+    }
+    if (end->tv_secs < start->tv_secs) {
+        return 0UL;
+    }
+    sec = end->tv_secs - start->tv_secs;
+    if (end->tv_micro >= start->tv_micro) {
+        usec = end->tv_micro - start->tv_micro;
+    } else {
+        if (sec == 0UL) {
+            return 0UL;
+        }
+        sec--;
+        usec = (end->tv_micro + 1000000UL) - start->tv_micro;
+    }
+    return sec * 1000UL + usec / 1000UL;
+}
+
 static BOOL
 ht_host_match(STRPTR a, STRPTR b)
 {

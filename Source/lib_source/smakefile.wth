@@ -15,6 +15,7 @@ FROM     StartUp.o
          ht_http.o
          ht_async.o
          ht_hooks.o
+         ht_timing.o
          httpcch.o
          session.o
          transaction.o
@@ -22,6 +23,6 @@ FROM     StartUp.o
          url_lvo.o
          cookie.o
 LIB      LIB:sc.lib LIB:amiga.lib
-SC SD ND
+SD ND
 NODEBUG
 TO       amihttp.library

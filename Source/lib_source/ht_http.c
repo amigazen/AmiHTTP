@@ -732,6 +732,7 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
     if (rc != 0) {
         return rc;
     }
+    ht_timing_first_byte(txn);
     rc = ht_find_crlf(txn->ht_Conn, &line_start, &line_len);
     while (rc == ERROR_HTTP_READ_TIMEOUT) {
         rc = ht_conn_fill(base, txn->ht_Conn, timeout);
@@ -1360,6 +1361,7 @@ ht_http_body_finish(struct AmiHttpBase *base, struct HttpTransaction *txn)
         txn->ht_Conn = NULL;
     }
     txn->ht_Flags |= HTF_BODY_DONE;
+    ht_timing_body_done(txn);
 }
 
 /*

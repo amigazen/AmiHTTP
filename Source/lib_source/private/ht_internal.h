@@ -26,6 +26,9 @@
 #ifndef LIBRARIES_Z_H
 #include <libraries/z.h>
 #endif
+#ifndef DEVICES_TIMER_H
+#include <devices/timer.h>
+#endif
 
 #define HT_MAGIC_SESSION    0x48545353UL
 #define HT_MAGIC_TXN        0x48545458UL
@@ -211,6 +214,10 @@ struct HttpTransaction
     BOOL                ht_Complete;
     struct Hook         *ht_Hooks[8];
     struct HttpTiming   ht_Timing;
+    struct timeval      ht_TvPerform;
+    struct timeval      ht_TvHopConnect;
+    BOOL                ht_TvPerformSet;
+    BOOL                ht_TvHopConnectSet;
     struct Http_cc_accum ht_CcAccum;
     z_stream            ht_ZStream;
     BOOL                ht_ZInited;
@@ -306,6 +313,8 @@ VOID ht_pool_release(struct AmiHttpBase *base, struct HtConnection *conn,
     BOOL keepalive);
 VOID ht_pool_shutdown(struct AmiHttpBase *base);
 VOID ht_timer_shutdown(VOID);
+BOOL ht_timer_get_time(struct timeval *tv);
+ULONG ht_timer_delta_ms(struct timeval *start, struct timeval *end);
 struct HtConnection *ht_connection_new(struct AmiHttpBase *base);
 VOID ht_connection_free(struct AmiHttpBase *base, struct HtConnection *conn);
 
@@ -361,6 +370,14 @@ VOID ht_async_cancel(struct HttpTransaction *txn);
 
 /* transaction.c - shared sync perform for worker task */
 LONG ht_txn_perform_sync(struct HttpTransaction *txn);
+
+/* ht_timing.c */
+VOID ht_timing_begin_sync(struct HttpTransaction *txn);
+VOID ht_timing_hop_begin(struct HttpTransaction *txn);
+VOID ht_timing_connect_done(struct HttpTransaction *txn, BOOL reused);
+VOID ht_timing_first_byte(struct HttpTransaction *txn);
+VOID ht_timing_no_body_done(struct HttpTransaction *txn);
+VOID ht_timing_body_done(struct HttpTransaction *txn);
 
 /* session.c / transaction.c - LVO bodies declared in amihttp_funcs.h */
 

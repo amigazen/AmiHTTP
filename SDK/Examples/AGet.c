@@ -96,6 +96,7 @@ static struct EClockVal ag_et_log_ctx;
 #define AG_TEST_COOKIE  ((STRPTR)"test=value; Domain=example.com; Path=/test")
 
 static VOID ag_printf(STRPTR fmt, ...);
+static VOID ag_flush_msg(void);
 static LONG ag_selftest(void);
 static VOID ag_test_fail(STRPTR name, STRPTR detail);
 static VOID ag_test_expect_true(STRPTR label, LONG rv);

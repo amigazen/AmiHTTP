@@ -15,7 +15,7 @@ BUILD_H = private/ht_build.h
 OBJS    = StartUp.o LibInit.o libbases.o amihttp_funcs.o \
           ht_alloc.o ht_error.o ht_ssl.o ht_transport.o ht_proxy.o ht_pool.o \
           ht_url.o ht_http.o httpcch.o ht_auth.o ht_cookie.o ht_zlib.o \
-          ht_hooks.o ht_async.o \
+          ht_hooks.o ht_async.o ht_timing.o \
           session.o transaction.o connection.o url_lvo.o cookie.o
 
 all: $(TARGET)
@@ -93,6 +93,9 @@ ht_hooks.o: ht_hooks.c private/ht_internal.h private/ht_hooks.h
 
 ht_async.o: ht_async.c private/ht_internal.h
 	$(CC) ht_async.c
+
+ht_timing.o: ht_timing.c private/ht_internal.h
+	$(CC) ht_timing.c
 
 release:
 	Copy $(TARGET) //SYS/Libs/$(TARGET)

@@ -351,11 +351,17 @@ ht_txn_perform_once(struct HttpTransaction *txn)
     txn->ht_RequestUri = route.hr_RequestUri;
     route.hr_RequestUri = NULL;
     htDbgPut("ht_txn_perform_once pool_acquire");
+    ht_timing_hop_begin(txn);
     txn->ht_Conn = ht_pool_acquire(HttpBase, txn->ht_Session, &route, txn);
     ht_route_free(&route);
     ht_url_free_fields(&pu);
     if (txn->ht_Conn == NULL) {
         return HttpBase ? HttpBase->ahb_LastError : ERROR_HTTP_CONNECT_FAILED;
+    }
+    if (txn->ht_Conn->hc_Flags & HTF_CONN_REUSED) {
+        ht_timing_connect_done(txn, TRUE);
+    } else {
+        ht_timing_connect_done(txn, FALSE);
     }
     htDbgPut("ht_txn_perform_once send_request");
     rc = ht_http_send_request(HttpBase, txn);
@@ -393,6 +399,7 @@ ht_txn_perform_once(struct HttpTransaction *txn)
         }
         ht_pool_release(HttpBase, txn->ht_Conn, keepalive);
         txn->ht_Conn = NULL;
+        ht_timing_no_body_done(txn);
     }
     /* else: body read in HttpTransactionReadBody while ht_Conn remains open */
     txn->ht_Complete = TRUE;
@@ -661,6 +668,7 @@ ht_txn_perform_sync(struct HttpTransaction *txn)
         return ht_lvo_status(ERROR_HTTP_ABORTED);
     }
     htDbgPut("ht_txn_perform_sync");
+    ht_timing_begin_sync(txn);
     redirects = 0;
     for (;;) {
         if (ht_check_txn_abort(txn)) {
