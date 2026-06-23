@@ -146,8 +146,11 @@ struct HttpTransaction
     STRPTR              ht_Method;
     STRPTR              ht_Referer;
     STRPTR              ht_UserAgent;
-    STRPTR              ht_PostBody;
+    APTR                ht_PostBody;
+    APTR                ht_ReqBodySrc;
     ULONG               ht_PostLength;
+    BOOL                ht_PostBodyBinary;
+    STRPTR              ht_ContentType;
     STRPTR              ht_IfModifiedSince;
     STRPTR              ht_IfNoneMatch;
     LONG                ht_RangeStart;

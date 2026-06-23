@@ -412,9 +412,29 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
         strcat((char *)buf, line);
     }
     if (txn->ht_PostBody != NULL && txn->ht_PostLength > 0) {
+        STRPTR ctype;
+        BOOL is_post;
+
         sprintf((char *)line, "Content-Length: %lu\r\n", txn->ht_PostLength);
         strcat((char *)buf, line);
-        strcat((char *)buf, "Content-Type: application/x-www-form-urlencoded\r\n");
+        ctype = txn->ht_ContentType;
+        if (ctype != NULL && ctype[0] != '\0') {
+            sprintf((char *)line, "Content-Type: %s\r\n", ctype);
+            strcat((char *)buf, line);
+        } else {
+            is_post = FALSE;
+            if (txn->ht_Method != NULL &&
+                stricmp((char *)txn->ht_Method, "POST") == 0) {
+                is_post = TRUE;
+            } else if (txn->ht_Method == NULL ||
+                txn->ht_Method[0] == '\0') {
+                is_post = TRUE;
+            }
+            if (is_post) {
+                strcat((char *)buf,
+                    "Content-Type: application/x-www-form-urlencoded\r\n");
+            }
+        }
     }
     for (hh = (struct HttpHeader *)txn->ht_ReqHeaders.lh_Head;
          hh != NULL && hh->hh_Node.ln_Succ != NULL;

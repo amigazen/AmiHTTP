@@ -107,6 +107,31 @@ ht_txn_copy_peer_cert(struct HttpTransaction *txn, struct HtConnection *conn)
 }
 
 static VOID
+ht_txn_finalize_request_body(struct HttpTransaction *txn)
+{
+    APTR copy;
+    ULONG len;
+
+    if (txn == NULL || !txn->ht_PostBodyBinary) {
+        return;
+    }
+    if (txn->ht_PostBody != NULL) {
+        return;
+    }
+    if (txn->ht_ReqBodySrc == NULL || txn->ht_PostLength == 0) {
+        return;
+    }
+    len = txn->ht_PostLength;
+    copy = ht_alloc(len, MEMF_ANY);
+    if (copy == NULL) {
+        return;
+    }
+    memcpy(copy, txn->ht_ReqBodySrc, len);
+    txn->ht_PostBody = copy;
+    txn->ht_ReqBodySrc = NULL;
+}
+
+static VOID
 ht_txn_free_fields(struct HttpTransaction *txn)
 {
     if (txn == NULL) {
@@ -127,6 +152,9 @@ ht_txn_free_fields(struct HttpTransaction *txn)
     }
     if (txn->ht_PostBody) {
         ht_free(txn->ht_PostBody);
+    }
+    if (txn->ht_ContentType) {
+        ht_free(txn->ht_ContentType);
     }
     if (txn->ht_IfModifiedSince) {
         ht_free(txn->ht_IfModifiedSince);
@@ -222,6 +250,12 @@ ht_txn_switch_to_get(struct HttpTransaction *txn)
         txn->ht_PostBody = NULL;
     }
     txn->ht_PostLength = 0;
+    txn->ht_PostBodyBinary = FALSE;
+    txn->ht_ReqBodySrc = NULL;
+    if (txn->ht_ContentType) {
+        ht_free(txn->ht_ContentType);
+        txn->ht_ContentType = NULL;
+    }
 }
 
 static LONG
@@ -395,13 +429,29 @@ __ASM__ __SAVE_DS__ SetHttpTransactionAttrsA(
             if (txn->ht_PostBody) {
                 ht_free(txn->ht_PostBody);
             }
+            txn->ht_PostBodyBinary = FALSE;
             txn->ht_PostBody = ht_strdup((STRPTR)t->ti_Data);
             if (txn->ht_PostBody != NULL) {
                 txn->ht_PostLength = (ULONG)strlen((char *)txn->ht_PostBody);
             }
             break;
+        case HTTA_REQUEST_BODY:
+            if (txn->ht_PostBody) {
+                ht_free(txn->ht_PostBody);
+                txn->ht_PostBody = NULL;
+            }
+            txn->ht_PostBodyBinary = TRUE;
+            txn->ht_ReqBodySrc = (APTR)t->ti_Data;
+            break;
         case HTTA_POST_LENGTH:
             txn->ht_PostLength = (ULONG)t->ti_Data;
+            ht_txn_finalize_request_body(txn);
+            break;
+        case HTTA_CONTENT_TYPE:
+            if (txn->ht_ContentType) {
+                ht_free(txn->ht_ContentType);
+            }
+            txn->ht_ContentType = ht_strdup((STRPTR)t->ti_Data);
             break;
         case HTTA_RANGE_START:
             txn->ht_RangeStart = (LONG)t->ti_Data;
@@ -454,6 +504,11 @@ __ASM__ __SAVE_DS__ SetHttpTransactionAttrsA(
         default:
             break;
         }
+    }
+    ht_txn_finalize_request_body(txn);
+    if (txn->ht_PostBodyBinary && txn->ht_PostBody == NULL &&
+        txn->ht_ReqBodySrc != NULL && txn->ht_PostLength > 0) {
+        return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
     }
     return 1;
 }

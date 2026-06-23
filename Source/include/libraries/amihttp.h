@@ -134,6 +134,10 @@ struct ParsedUrl;
 /* Async: Exec task + signal bit (0-31) signalled when PerformAsync completes. */
 #define HTTA_NOTIFY_TASK            (TAG_USER + 0x213)
 #define HTTA_NOTIFY_SIGNAL          (TAG_USER + 0x214)
+/* Binary request entity (APTR); pair with HTTA_POST_LENGTH. Copied into txn. */
+#define HTTA_REQUEST_BODY           (TAG_USER + 0x215)
+/* Request Content-Type when a body is sent; omit for POST default form type only. */
+#define HTTA_CONTENT_TYPE           (TAG_USER + 0x216)
 
 /****************************************************************************/
 /* Tier 2 body streaming (HttpTransactionReadBody)                            */
