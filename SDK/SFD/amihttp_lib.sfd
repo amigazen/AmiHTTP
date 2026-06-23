@@ -1,0 +1,110 @@
+==id $VER: amihttp_lib.sfd 1.1 (22.6.2026)
+*"amihttp.library"
+==base _HttpBase
+==basetype struct Library *
+==libname amihttp.library
+==include <exec/types.h>
+==include <libraries/amihttp.h>
+==include <amihttp/amihttpbase.h>
+==bias 30
+==public
+==version 1
+*
+* Tier 0 - Per-process configuration (after OpenLibrary only).
+*
+* Bootstrap: OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket
+* opens on first HTTP use; amisslmaster / OpenAmiSSLTags on first HTTPS use
+*
+LONG HttpBaseTagList(struct TagItem *tags) (a0)
+LONG HttpError() ()
+STRPTR HttpGetErrorString(LONG code) (d0)
+*
+* Tier 1 - HttpSession persistent client context.
+*
+struct HttpSession *NewHttpSession() ()
+VOID DisposeHttpSession(struct HttpSession *session) (a0)
+LONG SetHttpSessionAttrsA(struct HttpSession *session, struct TagItem *tags) (a0,a1)
+LONG HttpSessionAttachCookieJar(struct HttpSession *session, struct HttpCookieJar *jar) (a0,a1)
+VOID HttpSessionDetachCookieJar(struct HttpSession *session) (a0)
+LONG SetHttpSessionHook(struct HttpSession *session, ULONG type, struct Hook *hook) (a0,d0,a1)
+*
+* Tier 2 - HttpTransaction request/response (primary API).
+*
+struct HttpTransaction *NewHttpTransaction(struct HttpSession *session) (a0)
+VOID DisposeHttpTransaction(struct HttpTransaction *txn) (a0)
+LONG SetHttpTransactionAttrsA(struct HttpTransaction *txn, struct TagItem *tags) (a0,a1)
+LONG HttpTransactionAddHeader(struct HttpTransaction *txn, STRPTR name, STRPTR value) (a0,a1,a2)
+VOID HttpTransactionClearHeaders(struct HttpTransaction *txn) (a0)
+LONG HttpTransactionPerform(struct HttpTransaction *txn) (a0)
+LONG HttpTransactionPerformAsync(struct HttpTransaction *txn) (a0)
+BOOL HttpTransactionIsComplete(struct HttpTransaction *txn) (a0)
+LONG WaitHttpTransaction(struct HttpTransaction *txn, ULONG timeout_secs) (a0,d0)
+VOID AbortHttpTransaction(struct HttpTransaction *txn) (a0)
+LONG HttpTransactionGetStatusCode(struct HttpTransaction *txn) (a0)
+STRPTR HttpTransactionGetStatusLine(struct HttpTransaction *txn) (a0)
+STRPTR HttpTransactionRespHeader(struct HttpTransaction *txn, STRPTR header_name) (a0,a1)
+struct List *HttpTransactionRespHeaders(struct HttpTransaction *txn) (a0)
+LONG HttpTransactionReadBody(struct HttpTransaction *txn, APTR buffer, ULONG buflen) (a0,a1,d0)
+STRPTR HttpTransactionGetRedirectLocation(struct HttpTransaction *txn) (a0)
+LONG HttpTransactionGetContentLength(struct HttpTransaction *txn) (a0)
+ULONG HttpTransactionGetBytesReceived(struct HttpTransaction *txn) (a0)
+LONG HttpTransactionGetTiming(struct HttpTransaction *txn, struct HttpTiming *timing) (a0,a1)
+LONG HttpTransactionGetLastError(struct HttpTransaction *txn) (a0)
+LONG SetHttpTransactionHook(struct HttpTransaction *txn, ULONG type, struct Hook *hook) (a0,d0,a1)
+*
+* Tier 3 - HttpConnection streaming / WebDAV / custom protocols.
+*
+struct HttpConnection *OpenHttpConnection(struct HttpSession *session, STRPTR host, ULONG port, BOOL ssl) (a0,a1,d0,d1)
+VOID CloseHttpConnection(struct HttpConnection *conn) (a0)
+LONG HttpConnectionWrite(struct HttpConnection *conn, APTR buffer, ULONG len) (a0,a1,d0)
+LONG HttpConnectionRead(struct HttpConnection *conn, APTR buffer, ULONG len) (a0,a1,d0)
+LONG HttpConnectionSendRequest(struct HttpConnection *conn, STRPTR method, STRPTR path, struct TagItem *tags) (a0,a1,a2,a3)
+LONG HttpConnectionReadResponseLine(struct HttpConnection *conn, STRPTR buffer, ULONG buflen) (a0,a1,d0)
+LONG HttpConnectionReadResponseHeaders(struct HttpConnection *conn) (a0)
+LONG HttpConnectionReadBodyChunk(struct HttpConnection *conn, APTR buffer, ULONG buflen) (a0,a1,d0)
+LONG HttpConnectionWriteBodyChunk(struct HttpConnection *conn, APTR buffer, ULONG len) (a0,a1,d0)
+BOOL HttpConnectionIsAlive(struct HttpConnection *conn) (a0)
+VOID ResetHttpConnection(struct HttpConnection *conn) (a0)
+STRPTR HttpConnectionRespHeader(struct HttpConnection *conn, STRPTR header_name) (a0,a1)
+struct List *HttpConnectionRespHeaders(struct HttpConnection *conn) (a0)
+LONG HttpConnectionGetStatusCode(struct HttpConnection *conn) (a0)
+STRPTR HttpConnectionGetStatusLine(struct HttpConnection *conn) (a0)
+*
+* URL parsing and encoding utilities.
+*
+struct ParsedUrl *ParseHttpUrl(STRPTR url) (a0)
+VOID DisposeHttpUrl(struct ParsedUrl *url) (a0)
+STRPTR BuildHttpUrl(struct ParsedUrl *url) (a0)
+STRPTR HttpUrlEncode(STRPTR str) (a0)
+STRPTR HttpUrlDecode(STRPTR str) (a0)
+STRPTR HttpPathEncode(STRPTR path) (a0)
+STRPTR HttpBuildQueryString(struct List *pairs) (a0)
+*
+* Optional HttpCookieJar (attach via HttpSessionAttachCookieJar).
+*
+struct HttpCookieJar *NewHttpCookieJar() ()
+VOID DisposeHttpCookieJar(struct HttpCookieJar *jar) (a0)
+LONG LoadHttpCookieJar(struct HttpCookieJar *jar, STRPTR filename) (a0,a1)
+LONG SaveHttpCookieJar(struct HttpCookieJar *jar, STRPTR filename) (a0,a1)
+VOID FlushHttpCookieJar(struct HttpCookieJar *jar, ULONG max_count) (a0,d0)
+LONG SetHttpCookie(struct HttpCookieJar *jar, STRPTR cookie_line) (a0,a1)
+STRPTR GetHttpCookieString(struct HttpCookieJar *jar, STRPTR url) (a0,a1)
+LONG SetHttpError(LONG code) (d0)
+LONG HttpFault(LONG code, STRPTR header, STRPTR buffer, LONG len) (d0,a0,a1,d1)
+*
+* URL part helpers (dos PathPart/FilePart style; caller frees with Free()).
+*
+STRPTR HttpUriSchemePart(STRPTR url) (a0)
+STRPTR HttpUriHostPart(STRPTR url) (a0)
+STRPTR HttpUriPathPart(STRPTR url) (a0)
+STRPTR HttpUriFilePart(STRPTR url) (a0)
+STRPTR HttpUriQueryPart(STRPTR url) (a0)
+STRPTR HttpUriParentPart(STRPTR url) (a0)
+STRPTR HttpUriAuthorityPart(STRPTR url) (a0)
+STRPTR HttpJoinUri(STRPTR base_url, STRPTR relative_url) (a0,a1)
+*
+* TLS peer certificate (after HTTPS HttpTransactionPerform).
+*
+LONG HttpTransactionGetPeerCert(struct HttpTransaction *txn, struct HttpSslPeerCert *cert) (a0,a1)
+VOID HttpPeerCertFree(struct HttpSslPeerCert *cert) (a0)
+==end
