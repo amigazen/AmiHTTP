@@ -6,6 +6,7 @@ FROM     StartUp.o
          ht_error.o
          ht_ssl.o
          ht_transport.o
+         ht_proxy.o
          ht_pool.o
          ht_url.o
          ht_auth.o

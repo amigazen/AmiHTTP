@@ -24,6 +24,7 @@
 
 BOOL ht_zlib_ensure(struct AmiHttpBase *base);
 LONG ht_zlib_inflate_begin(struct HttpTransaction *txn, LONG windowBits);
+LONG ht_zlib_wire_buf_ensure(struct HttpTransaction *txn);
 VOID ht_zlib_inflate_end(struct HttpTransaction *txn);
 
 #endif /* AMIHTTP_PRIVATE_HT_ZLIB_H */

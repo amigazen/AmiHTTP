@@ -9,6 +9,7 @@
 
 #include <exec/types.h>
 #include <exec/lists.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -81,7 +82,11 @@ __ASM__ __SAVE_DS__ OpenHttpConnection(
     __REG__(d1, BOOL ssl))
 {
     struct HtStreamConn *hst;
+    struct ParsedUrl pu;
+    struct HtRoute route;
+    char urlbuf[512];
     ULONG use_port;
+    LONG rc;
 
     if (host == NULL || host[0] == '\0') {
         ht_set_error(ERROR_HTTP_INVALID_URL);
@@ -99,6 +104,11 @@ __ASM__ __SAVE_DS__ OpenHttpConnection(
     if (use_port == 0) {
         use_port = ssl ? 443UL : 80UL;
     }
+    sprintf(urlbuf, "%s://%s", ssl ? "https" : "http", host);
+    if ((ssl && use_port != 443) || (!ssl && use_port != 80)) {
+        strcat(urlbuf, ":");
+        sprintf(urlbuf + strlen(urlbuf), "%lu", use_port);
+    }
     hst = (struct HtStreamConn *)ht_alloc(sizeof(struct HtStreamConn), MEMF_CLEAR);
     if (hst == NULL) {
         ht_set_error(ERROR_HTTP_OUT_OF_MEMORY);
@@ -108,7 +118,22 @@ __ASM__ __SAVE_DS__ OpenHttpConnection(
     hst->hsc_Session = session;
     hst->hsc_ContentLength = -1;
     NewList(&hst->hsc_RespHeaders);
-    hst->hsc_Conn = ht_pool_acquire(HttpBase, session, host, use_port, ssl);
+    rc = ht_url_parse((STRPTR)urlbuf, &pu);
+    if (rc != 0) {
+        ht_free(hst);
+        ht_set_error(rc);
+        return NULL;
+    }
+    pu.pu_Port = use_port;
+    rc = ht_route_resolve(HttpBase, session, &pu, (STRPTR)urlbuf, &route);
+    ht_url_free_fields(&pu);
+    if (rc != 0) {
+        ht_free(hst);
+        ht_set_error(rc);
+        return NULL;
+    }
+    hst->hsc_Conn = ht_pool_acquire(HttpBase, session, &route, NULL);
+    ht_route_free(&route);
     if (hst->hsc_Conn == NULL) {
         ht_free(hst);
         ht_set_error(HttpBase->ahb_LastError);

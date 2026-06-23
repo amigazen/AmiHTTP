@@ -24,5 +24,7 @@ VOID ht_hook_headers_done(struct HttpTransaction *txn);
 VOID ht_hook_body_chunk(struct HttpTransaction *txn, APTR data, ULONG len);
 VOID ht_hook_complete(struct HttpTransaction *txn);
 VOID ht_hook_error(struct HttpTransaction *txn, LONG code);
+BOOL ht_hook_cert_verify(struct HttpTransaction *txn, struct HtSsl *ssl,
+    LONG verify_result);
 
 #endif /* AMIHTTP_PRIVATE_HT_HOOKS_H */

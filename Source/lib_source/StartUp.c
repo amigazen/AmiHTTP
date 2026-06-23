@@ -199,6 +199,8 @@ __ASM__ __SAVE_DS__ OpenLib(__REG__(a6, struct AmiHttpBase *base))
 {
     base->ahb_LibNode.lib_OpenCnt++;
     base->ahb_LibNode.lib_Flags &= ~LIBF_DELEXP;
+    /* Clear stale IoErr-style state from a previous client open. */
+    base->ahb_LastError = 0;
     return base;
 }
 

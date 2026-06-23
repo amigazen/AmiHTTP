@@ -124,3 +124,35 @@ ht_hook_error(struct HttpTransaction *txn, LONG code)
     msg.her_Code = code;
     ht_hook_call(txn, HTHK_ERROR, (APTR)txn, (APTR)&msg);
 }
+
+BOOL
+ht_hook_cert_verify(struct HttpTransaction *txn, struct HtSsl *ssl,
+    LONG verify_result)
+{
+    struct HttpHookCertVerify msg;
+    struct Hook *hk;
+    ULONG ret;
+
+    if (txn == NULL || ssl == NULL) {
+        return FALSE;
+    }
+    memset(&msg, 0, sizeof(msg));
+    msg.hcv_Transaction = txn;
+    msg.hcv_VerifyResult = verify_result;
+    msg.hcv_Accept = FALSE;
+    ht_ssl_peer_cert_copy(&msg.hcv_Cert, ssl);
+    hk = txn->ht_Hooks[HTHK_CERT_VERIFY - 1];
+    if (hk == NULL && txn->ht_Session != NULL) {
+        hk = txn->ht_Session->hs_Hooks[HTHK_CERT_VERIFY - 1];
+    }
+    if (hk == NULL) {
+        ht_peer_cert_free_fields(&msg.hcv_Cert);
+        return FALSE;
+    }
+    ret = (ULONG)CallHookPkt(hk, (APTR)txn, (APTR)&msg);
+    ht_peer_cert_free_fields(&msg.hcv_Cert);
+    if (msg.hcv_Accept) {
+        return TRUE;
+    }
+    return (BOOL)(ret != 0);
+}

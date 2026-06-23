@@ -164,6 +164,9 @@ __ASM__ __SAVE_DS__ SetHttpSessionAttrsA(
         case HTSA_SSL_VERIFY:
             session->hs_SslVerify = (ULONG)t->ti_Data;
             break;
+        case HTSA_SSL_CERT_HOOK:
+            session->hs_Hooks[HTHK_CERT_VERIFY - 1] = (struct Hook *)t->ti_Data;
+            break;
         case HTSA_REFERER_POLICY:
             session->hs_RefererPolicy = (ULONG)t->ti_Data;
             break;

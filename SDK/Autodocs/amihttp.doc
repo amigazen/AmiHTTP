@@ -175,7 +175,7 @@ amihttp.library/WaitHttpTransaction
 
    SEE ALSO
        amihttp.library/tags, amihttp.library/hooks, amihttp.library/errors,
-       OWNERSHIP.md, Examples/AGet.c, Examples/async_demo.c
+       Examples/AGet.c, Examples/async_demo.c
 
 amihttp.library/errors                           amihttp.library/errors
 
@@ -255,7 +255,7 @@ amihttp.library/WaitHttpTransaction
    HOOK TYPES
 
    HTHK_PROGRESS (1)          — not yet invoked (reserved).
-   HTHK_CERT_VERIFY (2)       — not yet invoked (reserved).
+   HTHK_CERT_VERIFY (2)       — on TLS chain/hostname failure; see below.
    HTHK_REDIRECT (3)          — not yet invoked (reserved).
    HTHK_HEADERS_DONE (4)      — after response headers parsed.
    HTHK_BODY_CHUNK (5)        — after each HttpTransactionReadBody copy.
@@ -277,6 +277,44 @@ amihttp.library/WaitHttpTransaction
 
    HTHK_ERROR — struct HttpHookError
        her_Transaction, her_Code
+
+   HTHK_CERT_VERIFY — struct HttpHookCertVerify
+       hcv_Transaction, hcv_Cert (filled), hcv_VerifyResult (OpenSSL code),
+       hcv_Accept (BOOL, set TRUE to trust peer).  Hook return non-zero or
+       hcv_Accept TRUE overrides ERROR_HTTP_SSL_VERIFY for this connection.
+       Install via SetHttpSessionHook(HTHK_CERT_VERIFY) or HTSA_SSL_CERT_HOOK.
+
+   CERT VERIFY RETRY
+       When verification fails without an accepting hook, Perform returns
+       ERROR_HTTP_SSL_VERIFY.  Application flow:
+       1) HttpTransactionGetPeerCert() for display/pinning UI.
+       2) Install HTHK_CERT_VERIFY hook (or update HTSA_SSL_CERT_HOOK) that
+          sets hcv_Accept TRUE for this certificate.
+       3) Set HTTA_RETRY_CERT_VERIFY TRUE and call Perform again (one retry
+          per transaction unless hook accepts on first failure).
+
+   HTTA_POST_STREAM_HOOK — struct Hook *; message struct HttpHookPostStream.
+       Hook return value = bytes copied into hps_Buffer (0 = error/EOF early).
+       Pair with HTTA_POST_LENGTH and optional HTTA_CONTENT_TYPE.
+
+   HTTA_FORM_MULTIPART — struct List * of HttpFormPart nodes.  Library builds
+       multipart/form-data body before send; sets POST method when unset.
+
+   PROXY
+       HTSA_PROXY / HTBT_DEFAULT_PROXY: "host:port" or "http://host:port".
+       Plain HTTP uses absolute URI in the request line.  HTTPS uses CONNECT
+       tunnel then TLS to origin.  Proxy connections are never keep-alive
+       pooled.  HTSA_PROXY_AUTH is encoded and sent on
+       the first CONNECT/HTTP proxy request.  CONNECT 407 is retried once
+       when proxy credentials are available (same as HTTP 407 status retry).
+
+   PRE-EMPTIVE AUTH
+       HTSA_CREDENTIALS sends Authorization: Basic on the first request.
+       HTTA_RETRY_AUTH still enables a post-401 retry when needed.
+
+   REDIRECTS
+       301/302/303 switch to GET and drop body.  307/308 preserve method
+       and request body (RFC 7231).
 
    SEE ALSO
        SetHttpSessionHook(), SetHttpTransactionHook(),

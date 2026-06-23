@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include <proto/exec.h>
+#include <proto/utility.h>
 #include <proto/alib.h>
 #include <proto/z.h>
 
@@ -276,6 +277,209 @@ ht_txn_user_agent(struct HttpTransaction *txn)
     return ht_session_user_agent(NULL);
 }
 
+/*
+ * Build multipart/form-data body from HTTA_FORM_MULTIPART list when set.
+ * Length-tracked assembly so binary part payloads may contain NUL bytes.
+ */
+static ULONG ht_multipart_serial;
+
+static LONG
+ht_multipart_append(UBYTE *buf, ULONG cap, ULONG *pos,
+    const void *data, ULONG len)
+{
+    if (data == NULL || len == 0) {
+        return 0;
+    }
+    if (*pos + len > cap) {
+        return ERROR_HTTP_OUT_OF_MEMORY;
+    }
+    CopyMem((APTR)data, buf + *pos, len);
+    *pos += len;
+    return 0;
+}
+
+static LONG
+ht_multipart_append_str(UBYTE *buf, ULONG cap, ULONG *pos, STRPTR s)
+{
+    ULONG n;
+
+    if (s == NULL) {
+        return 0;
+    }
+    n = ht_strlen(s);
+    return ht_multipart_append(buf, cap, pos, s, n);
+}
+
+static LONG
+ht_http_prepare_multipart(struct HttpTransaction *txn)
+{
+    struct HttpFormPart *part;
+    ULONG total;
+    ULONG used;
+    ULONG cap;
+    UBYTE *buf;
+    ULONG ctype_len;
+    char line[512];
+    char bound[48];
+    LONG rc;
+
+    if (txn == NULL || txn->ht_FormParts == NULL) {
+        return 0;
+    }
+    if (txn->ht_MultipartBody != NULL) {
+        return 0;
+    }
+    ht_multipart_serial++;
+    sprintf(bound, "----AmiHttp%08lx", ht_multipart_serial);
+    if (txn->ht_MultipartBoundary) {
+        ht_free(txn->ht_MultipartBoundary);
+    }
+    txn->ht_MultipartBoundary = ht_strdup((STRPTR)bound);
+    if (txn->ht_MultipartBoundary == NULL) {
+        return ERROR_HTTP_OUT_OF_MEMORY;
+    }
+    total = 128;
+    for (part = (struct HttpFormPart *)txn->ht_FormParts->lh_Head;
+         part != NULL && part->hfp_Node.ln_Succ != NULL;
+         part = (struct HttpFormPart *)part->hfp_Node.ln_Succ) {
+        total += 192;
+        if (part->hfp_Name) {
+            total += ht_strlen(part->hfp_Name);
+        }
+        if (part->hfp_Filename) {
+            total += ht_strlen(part->hfp_Filename);
+        }
+        if (part->hfp_Data != NULL && part->hfp_Length > 0) {
+            total += part->hfp_Length;
+        } else if (part->hfp_Value) {
+            total += ht_strlen(part->hfp_Value);
+        }
+    }
+    cap = total;
+    buf = (UBYTE *)ht_alloc(cap, MEMF_CLEAR);
+    if (buf == NULL) {
+        return ERROR_HTTP_OUT_OF_MEMORY;
+    }
+    used = 0;
+    for (part = (struct HttpFormPart *)txn->ht_FormParts->lh_Head;
+         part != NULL && part->hfp_Node.ln_Succ != NULL;
+         part = (struct HttpFormPart *)part->hfp_Node.ln_Succ) {
+        if (part->hfp_Name == NULL) {
+            continue;
+        }
+        sprintf(line, "--%s\r\n", txn->ht_MultipartBoundary);
+        rc = ht_multipart_append_str(buf, cap, &used, (STRPTR)line);
+        if (rc != 0) {
+            ht_free(buf);
+            return rc;
+        }
+        if (part->hfp_Filename != NULL && part->hfp_Filename[0] != '\0') {
+            sprintf(line,
+                "Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n\r\n",
+                part->hfp_Name, part->hfp_Filename);
+        } else {
+            sprintf(line,
+                "Content-Disposition: form-data; name=\"%s\"\r\n\r\n",
+                part->hfp_Name);
+        }
+        rc = ht_multipart_append_str(buf, cap, &used, (STRPTR)line);
+        if (rc != 0) {
+            ht_free(buf);
+            return rc;
+        }
+        if (part->hfp_Data != NULL && part->hfp_Length > 0) {
+            rc = ht_multipart_append(buf, cap, &used,
+                part->hfp_Data, part->hfp_Length);
+        } else if (part->hfp_Value != NULL) {
+            rc = ht_multipart_append_str(buf, cap, &used, part->hfp_Value);
+        }
+        if (rc != 0) {
+            ht_free(buf);
+            return rc;
+        }
+        rc = ht_multipart_append_str(buf, cap, &used, (STRPTR)"\r\n");
+        if (rc != 0) {
+            ht_free(buf);
+            return rc;
+        }
+    }
+    sprintf(line, "--%s--\r\n", txn->ht_MultipartBoundary);
+    rc = ht_multipart_append_str(buf, cap, &used, (STRPTR)line);
+    if (rc != 0) {
+        ht_free(buf);
+        return rc;
+    }
+    txn->ht_MultipartBody = (STRPTR)buf;
+    txn->ht_MultipartLen = used;
+    if (txn->ht_PostBody && txn->ht_PostBody != txn->ht_MultipartBody) {
+        ht_free(txn->ht_PostBody);
+    }
+    txn->ht_PostBody = txn->ht_MultipartBody;
+    txn->ht_PostLength = used;
+    txn->ht_PostBodyBinary = TRUE;
+    if (txn->ht_ContentType) {
+        ht_free(txn->ht_ContentType);
+    }
+    ctype_len = ht_strlen(txn->ht_MultipartBoundary) + 32;
+    txn->ht_ContentType = (STRPTR)ht_alloc(ctype_len, MEMF_CLEAR);
+    if (txn->ht_ContentType != NULL) {
+        sprintf((char *)txn->ht_ContentType,
+            "multipart/form-data; boundary=%s", txn->ht_MultipartBoundary);
+    }
+    if (txn->ht_Method == NULL || txn->ht_Method[0] == '\0') {
+        if (txn->ht_Method) {
+            ht_free(txn->ht_Method);
+        }
+        txn->ht_Method = ht_strdup((STRPTR)"POST");
+    }
+    return 0;
+}
+
+static LONG
+ht_http_send_stream_body(struct AmiHttpBase *base, struct HttpTransaction *txn)
+{
+    UBYTE chunk[4096];
+    struct HttpHookPostStream msg;
+    struct Hook *hk;
+    ULONG offset;
+    ULONG got;
+    ULONG ret;
+    LONG rc;
+
+    if (txn == NULL || txn->ht_Conn == NULL || txn->ht_PostStreamHook == NULL) {
+        return 0;
+    }
+    if (txn->ht_PostLength == 0) {
+        return 0;
+    }
+    hk = txn->ht_PostStreamHook;
+    offset = 0;
+    while (offset < txn->ht_PostLength) {
+        memset(&msg, 0, sizeof(msg));
+        msg.hps_Transaction = txn;
+        msg.hps_Buffer = chunk;
+        msg.hps_MaxLen = sizeof(chunk);
+        if (sizeof(chunk) > txn->ht_PostLength - offset) {
+            msg.hps_MaxLen = txn->ht_PostLength - offset;
+        }
+        msg.hps_Offset = offset;
+        ret = (ULONG)CallHookPkt(hk, (APTR)txn, (APTR)&msg);
+        got = ret;
+        if (got == 0) {
+            return ERROR_HTTP_PROTOCOL;
+        }
+        if (got > msg.hps_MaxLen) {
+            got = msg.hps_MaxLen;
+        }
+        rc = ht_transport_send(base, txn->ht_Conn, chunk, got);
+        if (rc < 0) {
+            return rc;
+        }
+        offset += got;
+    }
+    return 0;
+}
+
 LONG
 ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_len)
 {
@@ -310,7 +514,9 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
         }
     }
     path = pu.pu_Path;
-    if (path == NULL || path[0] == '\0') {
+    if (txn->ht_RequestUri != NULL && txn->ht_RequestUri[0] != '\0') {
+        path = txn->ht_RequestUri;
+    } else if (path == NULL || path[0] == '\0') {
         path = (STRPTR)"/";
     }
     cap = HT_REQBUF_INIT;
@@ -321,7 +527,9 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
     }
     used = 0;
     p = buf;
-    if (pu.pu_Query != NULL && pu.pu_Query[0] != '\0') {
+    if (txn->ht_RequestUri != NULL && txn->ht_RequestUri[0] != '\0') {
+        sprintf((char *)line, "%s %s HTTP/1.1\r\n", method, txn->ht_RequestUri);
+    } else if (pu.pu_Query != NULL && pu.pu_Query[0] != '\0') {
         sprintf((char *)line, "%s %s?%s HTTP/1.1\r\n", method, path, pu.pu_Query);
     } else {
         sprintf((char *)line, "%s %s HTTP/1.1\r\n", method, path);
@@ -347,7 +555,8 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
     sprintf((char *)line, "User-Agent: %s\r\n", ht_txn_user_agent(txn));
     strcat((char *)buf, line);
     strcat((char *)buf, "Accept: */*\r\n");
-    if (txn->ht_Session != NULL && txn->ht_Session->hs_KeepAlive) {
+    if (txn->ht_Session != NULL && txn->ht_Session->hs_KeepAlive &&
+        (txn->ht_Conn == NULL || !txn->ht_Conn->hc_ViaProxy)) {
         strcat((char *)buf, "Connection: keep-alive\r\n");
         txn->ht_Flags |= HTF_KEEPALIVE_REQ;
     } else {
@@ -411,7 +620,8 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
             txn->ht_BasicProxyAuth);
         strcat((char *)buf, line);
     }
-    if (txn->ht_PostBody != NULL && txn->ht_PostLength > 0) {
+    if ((txn->ht_PostBody != NULL && txn->ht_PostLength > 0) ||
+        (txn->ht_PostStreamHook != NULL && txn->ht_PostLength > 0)) {
         STRPTR ctype;
         BOOL is_post;
 
@@ -421,7 +631,7 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
         if (ctype != NULL && ctype[0] != '\0') {
             sprintf((char *)line, "Content-Type: %s\r\n", ctype);
             strcat((char *)buf, line);
-        } else {
+        } else if (txn->ht_PostStreamHook == NULL) {
             is_post = FALSE;
             if (txn->ht_Method != NULL &&
                 stricmp((char *)txn->ht_Method, "POST") == 0) {
@@ -461,6 +671,10 @@ ht_http_send_request(struct AmiHttpBase *base, struct HttpTransaction *txn)
     if (txn == NULL || txn->ht_Conn == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
     }
+    rc = ht_http_prepare_multipart(txn);
+    if (rc != 0) {
+        return rc;
+    }
     rc = ht_http_build_request(txn, &req, &reqlen);
     if (rc != 0) {
         return rc;
@@ -469,6 +683,9 @@ ht_http_send_request(struct AmiHttpBase *base, struct HttpTransaction *txn)
     ht_free(req);
     if (rc < 0) {
         return rc;
+    }
+    if (txn->ht_PostStreamHook != NULL && txn->ht_PostLength > 0) {
+        return ht_http_send_stream_body(base, txn);
     }
     if (txn->ht_PostBody != NULL && txn->ht_PostLength > 0) {
         rc = ht_transport_send(base, txn->ht_Conn, txn->ht_PostBody,
@@ -1150,6 +1367,18 @@ ht_http_body_finish(struct AmiHttpBase *base, struct HttpTransaction *txn)
  * not ht_BytesReceived (decoded octets).
  */
 static LONG
+ht_compressed_read_failed(LONG copied)
+{
+    if (copied > 0) {
+        return copied;
+    }
+    if (HttpBase != NULL && HttpBase->ahb_LastError != 0) {
+        return -(LONG)HttpBase->ahb_LastError;
+    }
+    return 0;
+}
+
+static LONG
 ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
     UBYTE *buf, ULONG buflen)
 {
@@ -1185,7 +1414,7 @@ ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
                 avail = ht_chunk_avail(conn);
                 if (avail == 0) {
                     if (!ht_conn_readblock(base, conn, timeout)) {
-                        return (LONG)copied;
+                        return ht_compressed_read_failed((LONG)copied);
                     }
                     avail = ht_chunk_avail(conn);
                 }
@@ -1214,7 +1443,7 @@ ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
             rc = ht_chunk_read_size(conn, &chunk_size, &final_chunk);
             while (rc == ERROR_HTTP_READ_TIMEOUT) {
                 if (!ht_conn_readblock(base, conn, timeout)) {
-                    return (LONG)copied;
+                    return ht_compressed_read_failed((LONG)copied);
                 }
                 rc = ht_chunk_read_size(conn, &chunk_size, &final_chunk);
             }
@@ -1293,7 +1522,6 @@ static LONG
 ht_http_read_body_gzip(struct AmiHttpBase *base, struct HttpTransaction *txn,
     APTR dest, ULONG buflen)
 {
-    UBYTE inbuf[HT_GZIP_WIRE_CHUNK];
     UBYTE *out;
     ULONG copied;
     ULONG produced;
@@ -1309,6 +1537,12 @@ ht_http_read_body_gzip(struct AmiHttpBase *base, struct HttpTransaction *txn,
     rc = ht_zlib_inflate_begin(txn, txn->ht_ZWindowBits);
     if (rc != 0) {
         ht_set_txn_error(txn, rc);
+        return 0;
+    }
+    rc = ht_zlib_wire_buf_ensure(txn);
+    if (rc != 0) {
+        ht_set_txn_error(txn, rc);
+        ht_zlib_inflate_end(txn);
         return 0;
     }
 
@@ -1330,17 +1564,27 @@ ht_http_read_body_gzip(struct AmiHttpBase *base, struct HttpTransaction *txn,
         wire = 0;
         flush = Z_NO_FLUSH;
         if (txn->ht_ZStream.avail_in == 0 && !txn->ht_ZFinishing) {
-            wire = ht_http_read_compressed(base, txn, inbuf, HT_GZIP_WIRE_CHUNK);
+            wire = ht_http_read_compressed(base, txn, txn->ht_ZWireBuf,
+                HT_GZIP_WIRE_CHUNK);
             if (wire < 0) {
                 ht_set_txn_error(txn, ERROR_HTTP_READ_FAILED);
                 ht_zlib_inflate_end(txn);
                 return (LONG)copied;
             }
             if (wire == 0) {
+                /*
+                 * True EOF only after the final chunk; while HTF_CHUNKED is
+                 * still set a zero read is timeout/EOF, not end-of-gzip.
+                 */
+                if (txn->ht_Flags & HTF_CHUNKED) {
+                    ht_set_txn_error(txn, ERROR_HTTP_READ_FAILED);
+                    ht_zlib_inflate_end(txn);
+                    return (LONG)copied;
+                }
                 txn->ht_ZFinishing = TRUE;
                 flush = Z_FINISH;
             } else {
-                txn->ht_ZStream.next_in = inbuf;
+                txn->ht_ZStream.next_in = txn->ht_ZWireBuf;
                 txn->ht_ZStream.avail_in = (ULONG)wire;
             }
         } else if (txn->ht_ZFinishing) {
@@ -1371,6 +1615,14 @@ ht_http_read_body_gzip(struct AmiHttpBase *base, struct HttpTransaction *txn,
                 ht_set_txn_error(txn, 0);
                 return (LONG)copied;
             }
+        }
+        if (txn->ht_ZFinishing && produced == 0 && wire == 0 &&
+            txn->ht_ZStream.avail_in == 0 &&
+            (rc == Z_OK || rc == Z_BUF_ERROR)) {
+            ht_zlib_inflate_end(txn);
+            ht_http_body_finish(base, txn);
+            ht_set_txn_error(txn, 0);
+            return (LONG)copied;
         }
         if (rc != Z_OK) {
             ht_set_txn_error(txn, ERROR_HTTP_PROTOCOL);

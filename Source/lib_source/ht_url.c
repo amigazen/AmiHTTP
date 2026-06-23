@@ -232,6 +232,12 @@ ht_url_parse(STRPTR url, struct ParsedUrl *out)
     ht_url_clear(out);
 
     u = url;
+    while (u[0] == ' ' || u[0] == '\t') {
+        u++;
+    }
+    if (u[0] == '\0') {
+        return ERROR_HTTP_INVALID_URL;
+    }
     if (ht_prefix_icmp(u, (CONST_STRPTR)"http://", 7)) {
         out->pu_Scheme = ht_strdup((STRPTR)"http");
         out->pu_IsSecure = FALSE;
@@ -243,7 +249,13 @@ ht_url_parse(STRPTR url, struct ParsedUrl *out)
         default_port = 443;
         u += 8;
     } else {
-        return ERROR_HTTP_INVALID_URL;
+        /*
+         * Scheme-less URL (host, host:port, host/path) — default to http.
+         * Matches common CLI usage: "example.com" or "example.com/page".
+         */
+        out->pu_Scheme = ht_strdup((STRPTR)"http");
+        out->pu_IsSecure = FALSE;
+        default_port = 80;
     }
 
     p = u;

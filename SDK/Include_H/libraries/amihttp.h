@@ -134,6 +134,12 @@ struct ParsedUrl;
 /* Async: Exec task + signal bit (0-31) signalled when PerformAsync completes. */
 #define HTTA_NOTIFY_TASK            (TAG_USER + 0x213)
 #define HTTA_NOTIFY_SIGNAL          (TAG_USER + 0x214)
+/* Binary request entity (APTR); pair with HTTA_POST_LENGTH. Copied into txn. */
+#define HTTA_REQUEST_BODY           (TAG_USER + 0x215)
+/* Request Content-Type when a body is sent; omit for POST default form type only. */
+#define HTTA_CONTENT_TYPE           (TAG_USER + 0x216)
+/* After ERROR_HTTP_SSL_VERIFY, retry once if cert hook now accepts the peer. */
+#define HTTA_RETRY_CERT_VERIFY      (TAG_USER + 0x217)
 
 /****************************************************************************/
 /* Tier 2 body streaming (HttpTransactionReadBody)                            */
@@ -174,6 +180,21 @@ struct ParsedUrl;
 #define HTHK_LOG                    8
 
 /****************************************************************************/
+/* HttpSslPeerCert - filled by HttpTransactionGetPeerCert()                 */
+/****************************************************************************/
+
+struct HttpSslPeerCert
+{
+    STRPTR  hpc_Subject;
+    STRPTR  hpc_Issuer;
+    STRPTR  hpc_CommonName;
+    STRPTR  hpc_NotBefore;
+    STRPTR  hpc_NotAfter;
+    STRPTR  hpc_Serial;
+    LONG    hpc_VerifyResult;
+};
+
+/****************************************************************************/
 /* Hook message packets (passed as CallHookPkt message / h_Data).             */
 /****************************************************************************/
 
@@ -203,6 +224,43 @@ struct HttpHookError
     LONG                    her_Code;
 };
 
+/*
+ * HTHK_CERT_VERIFY — invoked when chain or hostname verification fails.
+ * Return non-zero (or set hcv_Accept TRUE) to trust the peer and continue.
+ */
+struct HttpHookCertVerify
+{
+    struct HttpTransaction *hcv_Transaction;
+    struct HttpSslPeerCert  hcv_Cert;
+    LONG                    hcv_VerifyResult;
+    BOOL                    hcv_Accept;
+};
+
+/*
+ * HTTA_POST_STREAM_HOOK — fill hps_Buffer up to hps_MaxLen at hps_Offset.
+ * Return byte count copied; 0 marks EOF.
+ */
+struct HttpHookPostStream
+{
+    struct HttpTransaction *hps_Transaction;
+    APTR                    hps_Buffer;
+    ULONG                   hps_MaxLen;
+    ULONG                   hps_Offset;
+};
+
+/*
+ * HTTA_FORM_MULTIPART — struct List of HttpFormPart nodes (multipart body).
+ */
+struct HttpFormPart
+{
+    struct Node hfp_Node;
+    STRPTR      hfp_Name;
+    STRPTR      hfp_Value;
+    STRPTR      hfp_Filename;
+    APTR        hfp_Data;
+    ULONG       hfp_Length;
+};
+
 /****************************************************************************/
 /* Tier 3 response headers (HttpConnectionReadResponseHeaders)                */
 /*   Parsed headers live in a struct List of HttpHeader nodes (same layout as */
@@ -225,21 +283,6 @@ struct HttpHookError
 #define HTSSL_VERIFY_NONE           0
 #define HTSSL_VERIFY_PEER           1
 #define HTSSL_VERIFY_PEER_STRICT    2
-
-/****************************************************************************/
-/* HttpSslPeerCert - filled by HttpTransactionGetPeerCert()                 */
-/****************************************************************************/
-
-struct HttpSslPeerCert
-{
-    STRPTR  hpc_Subject;
-    STRPTR  hpc_Issuer;
-    STRPTR  hpc_CommonName;
-    STRPTR  hpc_NotBefore;
-    STRPTR  hpc_NotAfter;
-    STRPTR  hpc_Serial;
-    LONG    hpc_VerifyResult;
-};
 
 /****************************************************************************/
 /* ParsedUrl - public read-only fields after ParseHttpUrl()                   */

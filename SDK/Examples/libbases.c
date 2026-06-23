@@ -10,3 +10,4 @@
 #include <exec/libraries.h>
 
 struct Library *HttpBase;
+struct Library *LowLevelBase;

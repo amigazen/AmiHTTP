@@ -54,6 +54,23 @@
 #define HTF_CONN_REUSED     0x0200
 #define HTF_BODY_BUFFERED   0x0400
 #define HTF_BODY_DONE       0x0800
+#define HTF_VIA_PROXY       0x1000
+
+/*
+ * Resolved TCP route for one transaction (direct or via HTTP proxy).
+ */
+struct HtRoute
+{
+    STRPTR  hr_ConnectHost;
+    ULONG   hr_ConnectPort;
+    STRPTR  hr_OriginHost;
+    ULONG   hr_OriginPort;
+    BOOL    hr_OriginSsl;
+    BOOL    hr_ViaProxy;
+    BOOL    hr_SslTunnel;
+    STRPTR  hr_RequestUri;
+    STRPTR  hr_TunnelTarget;
+};
 
 /*
  * Error conventions (dos.library IoErr / SetIoErr model):
@@ -108,6 +125,9 @@ struct HtConnection
     ULONG               hc_LastUsed;
     BOOL                hc_InUse;
     ULONG               hc_Flags;
+    BOOL                hc_ViaProxy;
+    STRPTR              hc_OriginHost;
+    ULONG               hc_OriginPort;
     UBYTE              *hc_IoBuf;
     ULONG               hc_IoLen;
     ULONG               hc_IoPos;
@@ -143,6 +163,7 @@ struct HttpTransaction
     struct HttpSession *ht_Session;
     struct HtConnection *ht_Conn;
     STRPTR              ht_Url;
+    STRPTR              ht_RequestUri;
     STRPTR              ht_Method;
     STRPTR              ht_Referer;
     STRPTR              ht_UserAgent;
@@ -159,6 +180,14 @@ struct HttpTransaction
     BOOL                ht_NoCache;
     BOOL                ht_NoBody;
     BOOL                ht_RetryAuth;
+    BOOL                ht_RetryCert;
+    BOOL                ht_CertRetryTried;
+    BOOL                ht_CertAccepted;
+    struct Hook        *ht_PostStreamHook;
+    struct List        *ht_FormParts;
+    STRPTR              ht_MultipartBody;
+    ULONG               ht_MultipartLen;
+    STRPTR              ht_MultipartBoundary;
     STRPTR              ht_AuthRealm;
     STRPTR              ht_BasicAuth;
     STRPTR              ht_BasicProxyAuth;
@@ -187,6 +216,7 @@ struct HttpTransaction
     BOOL                ht_ZInited;
     BOOL                ht_ZFinishing;
     LONG                ht_ZWindowBits;
+    UBYTE              *ht_ZWireBuf;    /* persistent inflate input (gzip+chunked) */
     ULONG               ht_WireReceived;
     UBYTE              *ht_DecodeBuf;
     ULONG               ht_DecodeLen;
@@ -238,6 +268,9 @@ LONG ht_transport_task_ssl_ensure(struct AmiHttpBase *base);
 VOID ht_transport_task_ssl_release(struct AmiHttpBase *base);
 LONG ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
     STRPTR host, ULONG port, BOOL ssl, ULONG timeout_secs, ULONG ssl_verify);
+LONG ht_transport_connect_route(struct AmiHttpBase *base, struct HtConnection *conn,
+    struct HtRoute *route, ULONG timeout_secs, ULONG ssl_verify,
+    struct HttpTransaction *txn);
 VOID ht_transport_disconnect(struct AmiHttpBase *base, struct HtConnection *conn);
 LONG ht_transport_send(struct AmiHttpBase *base, struct HtConnection *conn,
     APTR data, ULONG len);
@@ -249,7 +282,8 @@ BOOL ht_transport_conn_idle(struct AmiHttpBase *base, struct HtConnection *conn)
 struct HtSsl *ht_ssl_create(STRPTR hostname);
 VOID ht_ssl_destroy(struct HtSsl *s);
 LONG ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s,
-    LONG sock, STRPTR hostname, ULONG verify_mode);
+    LONG sock, STRPTR hostname, ULONG verify_mode, ULONG timeout_secs,
+    struct HttpTransaction *txn);
 LONG ht_ssl_send(struct HtSsl *s, APTR data, ULONG len);
 LONG ht_ssl_recv(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     APTR buf, ULONG len, ULONG timeout_secs);
@@ -259,9 +293,15 @@ VOID ht_ssl_capture_peer_cert(struct HtSsl *s);
 VOID ht_ssl_peer_cert_copy(struct HttpSslPeerCert *dst, struct HtSsl *s);
 VOID ht_ssl_peer_cert_clear(struct HtSsl *s);
 
+/* ht_proxy.c */
+LONG ht_route_resolve(struct AmiHttpBase *base, struct HttpSession *session,
+    struct ParsedUrl *pu, STRPTR full_url, struct HtRoute *route);
+VOID ht_route_free(struct HtRoute *route);
+
 /* ht_pool.c */
 struct HtConnection *ht_pool_acquire(struct AmiHttpBase *base,
-    struct HttpSession *session, STRPTR host, ULONG port, BOOL ssl);
+    struct HttpSession *session, struct HtRoute *route,
+    struct HttpTransaction *txn);
 VOID ht_pool_release(struct AmiHttpBase *base, struct HtConnection *conn,
     BOOL keepalive);
 VOID ht_pool_shutdown(struct AmiHttpBase *base);

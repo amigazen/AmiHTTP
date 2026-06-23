@@ -48,6 +48,7 @@ extern struct Library *SocketBase;
 
 #include "private/ht_debug.h"
 #include "private/ht_internal.h"
+#include "private/ht_hooks.h"
 
 struct HtSsl
 {
@@ -479,7 +480,8 @@ ht_ssl_check_hostname(X509 *cert, STRPTR hostname)
  * chain result from SSL_get_verify_result and hostname match.
  */
 static LONG
-ht_ssl_verify_peer(struct HtSsl *s, ULONG verify_mode)
+ht_ssl_verify_peer(struct HtSsl *s, ULONG verify_mode,
+    struct HttpTransaction *txn)
 {
     LONG vr;
     X509 *cert;
@@ -491,11 +493,18 @@ ht_ssl_verify_peer(struct HtSsl *s, ULONG verify_mode)
     vr = (LONG)SSL_get_verify_result(s->hs_Ssl);
     s->hs_CertVerifyResult = vr;
     if (vr != X509_V_OK) {
+        if (txn != NULL && ht_hook_cert_verify(txn, s, vr)) {
+            return 0;
+        }
         return ERROR_HTTP_SSL_VERIFY;
     }
     cert = SSL_get_peer_certificate(s->hs_Ssl);
     if (cert == NULL) {
         s->hs_CertVerifyResult = X509_V_ERR_UNSPECIFIED;
+        if (txn != NULL && ht_hook_cert_verify(txn, s,
+            s->hs_CertVerifyResult)) {
+            return 0;
+        }
         return ERROR_HTTP_SSL_VERIFY;
     }
     if (s->hs_Hostname != NULL) {
@@ -503,6 +512,10 @@ ht_ssl_verify_peer(struct HtSsl *s, ULONG verify_mode)
         if (!host_ok) {
             s->hs_CertVerifyResult = X509_V_ERR_HOSTNAME_MISMATCH;
             X509_free(cert);
+            if (txn != NULL && ht_hook_cert_verify(txn, s,
+                s->hs_CertVerifyResult)) {
+                return 0;
+            }
             return ERROR_HTTP_SSL_VERIFY;
         }
     }
@@ -548,10 +561,13 @@ ht_ssl_destroy(struct HtSsl *s)
 
 LONG
 ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
-    STRPTR hostname, ULONG verify_mode)
+    STRPTR hostname, ULONG verify_mode, ULONG timeout_secs,
+    struct HttpTransaction *txn)
 {
     LONG rc;
     LONG vr;
+
+    (void)timeout_secs;
 
     if (s == NULL || sock < 0) {
         return ERROR_HTTP_INVALID_HANDLE;
@@ -586,18 +602,25 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
         SSL_set_tlsext_host_name(s->hs_Ssl, (const char *)s->hs_Hostname);
     }
     SSL_set_fd(s->hs_Ssl, (int)sock);
+    /*
+     * Blocking SSL_connect: AmiSSL on Roadshow does not complete a handshake
+     * reliably when the socket is switched to non-blocking (WANT_READ loop).
+     */
     if (SSL_connect(s->hs_Ssl) <= 0) {
         if (verify_mode != HTSSL_VERIFY_NONE) {
             vr = (LONG)SSL_get_verify_result(s->hs_Ssl);
             if (vr != X509_V_OK) {
                 ht_ssl_capture_peer_cert(s);
+                if (txn != NULL && ht_hook_cert_verify(txn, s, vr)) {
+                    return 0;
+                }
                 return ERROR_HTTP_SSL_VERIFY;
             }
         }
         return ERROR_HTTP_SSL_HANDSHAKE;
     }
     ht_ssl_capture_peer_cert(s);
-    rc = ht_ssl_verify_peer(s, verify_mode);
+    rc = ht_ssl_verify_peer(s, verify_mode, txn);
     if (rc != 0) {
         return rc;
     }

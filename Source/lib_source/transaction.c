@@ -141,6 +141,17 @@ ht_txn_free_fields(struct HttpTransaction *txn)
     if (txn->ht_Url) {
         ht_free(txn->ht_Url);
     }
+    if (txn->ht_RequestUri) {
+        ht_free(txn->ht_RequestUri);
+    }
+    if (txn->ht_MultipartBody) {
+        ht_free(txn->ht_MultipartBody);
+        txn->ht_MultipartBody = NULL;
+    }
+    if (txn->ht_MultipartBoundary) {
+        ht_free(txn->ht_MultipartBoundary);
+        txn->ht_MultipartBoundary = NULL;
+    }
     if (txn->ht_Method) {
         ht_free(txn->ht_Method);
     }
@@ -150,7 +161,11 @@ ht_txn_free_fields(struct HttpTransaction *txn)
     if (txn->ht_UserAgent) {
         ht_free(txn->ht_UserAgent);
     }
-    if (txn->ht_PostBody) {
+    if (txn->ht_MultipartBody) {
+        ht_free(txn->ht_MultipartBody);
+        txn->ht_MultipartBody = NULL;
+        txn->ht_PostBody = NULL;
+    } else if (txn->ht_PostBody) {
         ht_free(txn->ht_PostBody);
     }
     if (txn->ht_ContentType) {
@@ -258,10 +273,56 @@ ht_txn_switch_to_get(struct HttpTransaction *txn)
     }
 }
 
+/*
+ * Pre-emptive Basic auth: send Authorization / Proxy-Authorization on the first
+ * request when session credentials are already known (AWeb Guessauthorize).
+ */
+static VOID
+ht_txn_prepare_auth(struct HttpTransaction *txn)
+{
+    if (txn == NULL || txn->ht_Session == NULL) {
+        return;
+    }
+    if (txn->ht_Session->hs_Credentials != NULL &&
+        txn->ht_BasicAuth == NULL) {
+        txn->ht_BasicAuth = ht_auth_basic_encode(
+            txn->ht_Session->hs_Credentials);
+    }
+    if (txn->ht_Session->hs_ProxyAuth != NULL &&
+        txn->ht_BasicProxyAuth == NULL) {
+        txn->ht_BasicProxyAuth = ht_auth_basic_encode(
+            txn->ht_Session->hs_ProxyAuth);
+    }
+}
+
+/*
+ * Encode proxy credentials for a 407 retry (CONNECT tunnel or HTTP proxy).
+ * Returns 0 on success, ERROR_HTTP_OUT_OF_MEMORY on failure.
+ */
+static LONG
+ht_txn_apply_proxy_auth_retry(struct HttpTransaction *txn)
+{
+    if (txn == NULL || txn->ht_Session == NULL ||
+        txn->ht_Session->hs_ProxyAuth == NULL) {
+        return ERROR_HTTP_PROXY_AUTH;
+    }
+    if (txn->ht_BasicProxyAuth) {
+        ht_free(txn->ht_BasicProxyAuth);
+    }
+    txn->ht_BasicProxyAuth = ht_auth_basic_encode(
+        txn->ht_Session->hs_ProxyAuth);
+    if (txn->ht_BasicProxyAuth == NULL) {
+        return ERROR_HTTP_OUT_OF_MEMORY;
+    }
+    txn->ht_ProxyAuthTried = TRUE;
+    return 0;
+}
+
 static LONG
 ht_txn_perform_once(struct HttpTransaction *txn)
 {
     struct ParsedUrl pu;
+    struct HtRoute route;
     BOOL keepalive;
     LONG rc;
 
@@ -269,6 +330,7 @@ ht_txn_perform_once(struct HttpTransaction *txn)
     if (txn->ht_Url == NULL) {
         return ERROR_HTTP_INVALID_URL;
     }
+    ht_txn_prepare_auth(txn);
     rc = ht_url_parse(txn->ht_Url, &pu);
     if (rc != 0) {
         return rc;
@@ -277,12 +339,20 @@ ht_txn_perform_once(struct HttpTransaction *txn)
         ht_url_free_fields(&pu);
         return ERROR_HTTP_INVALID_URL;
     }
-    if (pu.pu_Port == 0) {
-        pu.pu_Port = pu.pu_IsSecure ? 443UL : 80UL;
+    if (txn->ht_RequestUri) {
+        ht_free(txn->ht_RequestUri);
+        txn->ht_RequestUri = NULL;
     }
+    rc = ht_route_resolve(HttpBase, txn->ht_Session, &pu, txn->ht_Url, &route);
+    if (rc != 0) {
+        ht_url_free_fields(&pu);
+        return rc;
+    }
+    txn->ht_RequestUri = route.hr_RequestUri;
+    route.hr_RequestUri = NULL;
     htDbgPut("ht_txn_perform_once pool_acquire");
-    txn->ht_Conn = ht_pool_acquire(HttpBase, txn->ht_Session,
-        pu.pu_Host, pu.pu_Port, pu.pu_IsSecure);
+    txn->ht_Conn = ht_pool_acquire(HttpBase, txn->ht_Session, &route, txn);
+    ht_route_free(&route);
     ht_url_free_fields(&pu);
     if (txn->ht_Conn == NULL) {
         return HttpBase ? HttpBase->ahb_LastError : ERROR_HTTP_CONNECT_FAILED;
@@ -495,6 +565,15 @@ __ASM__ __SAVE_DS__ SetHttpTransactionAttrsA(
         case HTTA_RETRY_AUTH:
             txn->ht_RetryAuth = (BOOL)t->ti_Data;
             break;
+        case HTTA_RETRY_CERT_VERIFY:
+            txn->ht_RetryCert = (BOOL)t->ti_Data;
+            break;
+        case HTTA_POST_STREAM_HOOK:
+            txn->ht_PostStreamHook = (struct Hook *)t->ti_Data;
+            break;
+        case HTTA_FORM_MULTIPART:
+            txn->ht_FormParts = (struct List *)t->ti_Data;
+            break;
         case HTTA_NOTIFY_TASK:
             txn->ht_NotifyTask = (struct Task *)t->ti_Data;
             break;
@@ -591,6 +670,25 @@ ht_txn_perform_sync(struct HttpTransaction *txn)
         }
         rc = ht_txn_perform_once(txn);
         if (rc != 0) {
+            if (rc == ERROR_HTTP_SSL_VERIFY && txn->ht_RetryCert &&
+                !txn->ht_CertRetryTried) {
+                txn->ht_CertRetryTried = TRUE;
+                ht_txn_clear_resp_state(txn);
+                continue;
+            }
+            /*
+             * CONNECT tunnel 407 is detected in ht_proxy.c before response
+             * headers exist; mirror the HTTP 407 status retry here.
+             */
+            if (rc == ERROR_HTTP_PROXY_AUTH && txn->ht_Session != NULL &&
+                txn->ht_Session->hs_ProxyAuth != NULL &&
+                !txn->ht_ProxyAuthTried) {
+                rc = ht_txn_apply_proxy_auth_retry(txn);
+                if (rc == 0) {
+                    ht_txn_clear_resp_state(txn);
+                    continue;
+                }
+            }
             ht_set_txn_error(txn, rc);
             ht_hook_error(txn, rc);
             return ht_lvo_status(rc);
@@ -615,17 +713,12 @@ ht_txn_perform_sync(struct HttpTransaction *txn)
         if (txn->ht_StatusCode == 407 && txn->ht_Session != NULL &&
             txn->ht_Session->hs_ProxyAuth != NULL &&
             !txn->ht_ProxyAuthTried) {
-            if (txn->ht_BasicProxyAuth) {
-                ht_free(txn->ht_BasicProxyAuth);
+            rc = ht_txn_apply_proxy_auth_retry(txn);
+            if (rc != 0) {
+                ht_set_txn_error(txn, rc);
+                ht_hook_error(txn, rc);
+                return ht_lvo_status(rc);
             }
-            txn->ht_BasicProxyAuth = ht_auth_basic_encode(
-                txn->ht_Session->hs_ProxyAuth);
-            if (txn->ht_BasicProxyAuth == NULL) {
-                ht_set_txn_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
-                ht_hook_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
-                return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
-            }
-            txn->ht_ProxyAuthTried = TRUE;
             ht_txn_clear_resp_state(txn);
             continue;
         }
@@ -658,6 +751,7 @@ ht_txn_perform_sync(struct HttpTransaction *txn)
             txn->ht_StatusCode == 303) {
             ht_txn_switch_to_get(txn);
         }
+        /* 307 / 308 preserve method and request body (RFC 7231). */
         ht_txn_clear_resp_state(txn);
     }
     ht_set_txn_error(txn, 0);

@@ -13,7 +13,7 @@ TARGET  = amihttp.library
 BUILD_H = private/ht_build.h
 
 OBJS    = StartUp.o LibInit.o libbases.o amihttp_funcs.o \
-          ht_alloc.o ht_error.o ht_ssl.o ht_transport.o ht_pool.o \
+          ht_alloc.o ht_error.o ht_ssl.o ht_transport.o ht_proxy.o ht_pool.o \
           ht_url.o ht_http.o httpcch.o ht_auth.o ht_cookie.o ht_zlib.o \
           ht_hooks.o ht_async.o \
           session.o transaction.o connection.o url_lvo.o cookie.o
@@ -48,6 +48,9 @@ ht_ssl.o: ht_ssl.c private/ht_internal.h
 
 ht_transport.o: ht_transport.c private/ht_internal.h
 	$(CC) ht_transport.c
+
+ht_proxy.o: ht_proxy.c private/ht_internal.h private/ht_hooks.h
+	$(CC) ht_proxy.c
 
 ht_pool.o: ht_pool.c private/ht_internal.h
 	$(CC) ht_pool.c

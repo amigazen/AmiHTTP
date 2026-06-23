@@ -18,7 +18,7 @@
  *   QUIET/S  - body (or TO file) only; stderr used for errors only
  *   HEADERS/S- request/response header dump on stderr (no API trace)
  *   VERBOSE/S- step-by-step amihttp API trace on stderr
- *   TEST/S   - offline amihttp API self-test (no network); URL optional
+ *   TEST/S   - offline amihttp API self-test (no network); URL/K ignored
  */
 
 #define __USE_SYSBASE
@@ -34,9 +34,12 @@
 #include <proto/dos.h>
 #include <proto/exec.h>
 
+#include <devices/timer.h>
+
 #include <libraries/amihttp.h>
 #include <proto/amihttp.h>
 #include <proto/alib.h>
+#include <proto/lowlevel.h>
 
 
 static const char version_tag[] = "\0$VER: AGet 1.0 (22.6.26)";
@@ -84,12 +87,16 @@ static BOOL   ag_body_console;
 static LONG   ag_body_last_byte;
 static LONG   ag_test_fails;
 
+/* lowlevel.library/ElapsedTime (V40) — see NDK Autodocs/lowlevel.doc */
+static struct EClockVal ag_et_ctx;
+static struct EClockVal ag_et_log_ctx;
+
 #define AG_EMPTY_STR    ((STRPTR)"")
 #define AG_TEST_URL     ((STRPTR)"http://example.com/test?a=1")
 #define AG_TEST_COOKIE  ((STRPTR)"test=value; Domain=example.com; Path=/test")
 
 static VOID ag_printf(STRPTR fmt, ...);
-static LONG ag_selftest(STRPTR url);
+static LONG ag_selftest(void);
 static VOID ag_test_fail(STRPTR name, STRPTR detail);
 static VOID ag_test_expect_true(STRPTR label, LONG rv);
 static VOID ag_test_expect_false(STRPTR label, LONG rv);
@@ -99,6 +106,157 @@ static VOID ag_test_expect_null(STRPTR label, APTR p);
 static VOID ag_test_expect_str(STRPTR label, STRPTR got, STRPTR want);
 static VOID ag_test_expect_substr(STRPTR label, STRPTR got, STRPTR needle);
 static VOID ag_test_expect_http_error(STRPTR label, LONG want);
+static VOID ag_et_init(void);
+static VOID ag_et_fini(void);
+static ULONG ag_et_delta_ms(void);
+static VOID ag_et_log(STRPTR label);
+static VOID ag_et_summary(ULONG perform_ms, ULONG body_ms, ULONG total_ms, LONG bytes);
+
+/*
+ * Open lowlevel.library and prime ElapsedTime().  The first call after zeroing
+ * EClockVal returns an undefined value and must be discarded (per autodoc).
+ */
+static VOID
+ag_et_init(void)
+{
+    if (LowLevelBase != NULL) {
+        return;
+    }
+    LowLevelBase = OpenLibrary("lowlevel.library", 40);
+    if (LowLevelBase == NULL) {
+        return;
+    }
+    ag_et_ctx.ev_hi = 0UL;
+    ag_et_ctx.ev_lo = 0UL;
+    ag_et_log_ctx.ev_hi = 0UL;
+    ag_et_log_ctx.ev_lo = 0UL;
+    (void)ElapsedTime(&ag_et_ctx);
+    (void)ElapsedTime(&ag_et_log_ctx);
+}
+
+static VOID
+ag_et_fini(void)
+{
+    if (LowLevelBase != NULL) {
+        CloseLibrary(LowLevelBase);
+        LowLevelBase = NULL;
+    }
+}
+
+/*
+ * Return milliseconds elapsed since the previous ElapsedTime() on ag_et_ctx.
+ * Fixed-point 16.16 seconds from ElapsedTime are converted to ms.
+ */
+static ULONG
+ag_et_delta_ms(void)
+{
+    ULONG et;
+    ULONG sec;
+    ULONG frac;
+
+    if (LowLevelBase == NULL) {
+        return 0UL;
+    }
+    et = ElapsedTime(&ag_et_ctx);
+    sec = (et >> 16) & 0xFFFFUL;
+    frac = et & 0xFFFFUL;
+    return (sec * 1000UL) + ((frac * 1000UL) / 65536UL);
+}
+
+/*
+ * Verbose trace helper: log +sec.mmm since the previous ElapsedTime() call.
+ */
+static VOID
+ag_et_log(STRPTR label)
+{
+    char etbuf[24];
+    ULONG et;
+    ULONG sec;
+    ULONG frac;
+    ULONG ms;
+
+    if (!ag_verbose && !ag_test_mode) {
+        return;
+    }
+    if (LowLevelBase == NULL || label == NULL) {
+        return;
+    }
+    et = ElapsedTime(&ag_et_log_ctx);
+    sec = (et >> 16) & 0xFFFFUL;
+    frac = et & 0xFFFFUL;
+    ms = (frac * 1000UL) / 65536UL;
+    sprintf(etbuf, "+%lu.%03lu", (unsigned long)sec, (unsigned long)ms);
+    ag_printf("AGet: %s %s\n", etbuf, label);
+    ag_flush_msg();
+}
+
+/*
+ * One-line timing summary on stderr (default mode).  Suppressed only in QUIET.
+ */
+static VOID
+ag_et_summary(ULONG perform_ms, ULONG body_ms, ULONG total_ms, LONG bytes)
+{
+    ULONG kbps_x10;
+
+    if (ag_quiet) {
+        return;
+    }
+    if (LowLevelBase == NULL) {
+        return;
+    }
+    ag_printf("AGet: timing: perform=%lu ms body=%lu ms total=%lu ms",
+        (unsigned long)perform_ms,
+        (unsigned long)body_ms,
+        (unsigned long)total_ms);
+    if (bytes > 0 && total_ms > 0UL) {
+        kbps_x10 = (ULONG)(((ULONG)bytes * 10000UL) / total_ms / 1024UL);
+        ag_printf(" (%ld bytes, %lu.%01lu KB/s)",
+            bytes,
+            (unsigned long)(kbps_x10 / 10UL),
+            (unsigned long)(kbps_x10 % 10UL));
+    } else if (bytes > 0) {
+        ag_printf(" (%ld bytes)", bytes);
+    }
+    ag_printf("\n");
+    ag_flush_msg();
+}
+
+/*
+ * Prepend http:// when the user omits a scheme (e.g. "amigaworld.net").
+ * Caller must FreeVec() the result.
+ */
+static STRPTR
+ag_normalize_url(STRPTR url)
+{
+    STRPTR p;
+    STRPTR out;
+    ULONG len;
+
+    if (url == NULL) {
+        return NULL;
+    }
+    p = url;
+    while (p[0] == ' ' || p[0] == '\t') {
+        p++;
+    }
+    if (p[0] == '\0') {
+        return NULL;
+    }
+    if (strstr((const char *)p, "://") != NULL) {
+        len = (ULONG)strlen((const char *)p);
+        out = (STRPTR)AllocMem(len + 1, MEMF_CLEAR);
+        if (out != NULL) {
+            strcpy((char *)out, (const char *)p);
+        }
+        return out;
+    }
+    len = 7 + (ULONG)strlen((const char *)p);
+    out = (STRPTR)AllocMem(len + 1, MEMF_CLEAR);
+    if (out != NULL) {
+        sprintf((char *)out, "http://%s", p);
+    }
+    return out;
+}
 
 static VOID
 ag_flush_msg(void)
@@ -363,8 +521,8 @@ ag_log_header_list(struct List *headers)
 }
 
 static VOID
-ag_log_request_headers(struct AGetArgs *args, STRPTR method,
-    STRPTR user_agent, struct HttpCookieJar *jar)
+ag_log_request_headers(STRPTR url, STRPTR method,
+    STRPTR user_agent, struct HttpCookieJar *jar, STRPTR *custom_headers)
 {
     STRPTR cstr;
     LONG i;
@@ -373,12 +531,12 @@ ag_log_request_headers(struct AGetArgs *args, STRPTR method,
         return;
     }
     ag_printf("AGet: --- Request ---\n");
-    ag_printf("AGet: %s %s HTTP/1.1\n", method, args->URL);
+    ag_printf("AGet: %s %s HTTP/1.1\n", method, url);
     ag_printf("AGet: User-Agent: %s\n", user_agent);
     ag_printf("AGet: Cache-Control: no-cache\n");
     ag_printf("AGet: Pragma: no-cache\n");
     if (jar != NULL) {
-        cstr = GetHttpCookieString(jar, args->URL);
+        cstr = GetHttpCookieString(jar, url);
         if (cstr != NULL && cstr[0] != '\0') {
             ag_printf("AGet: Cookie: %s\n", cstr);
         }
@@ -386,9 +544,9 @@ ag_log_request_headers(struct AGetArgs *args, STRPTR method,
             ag_free_str(cstr);
         }
     }
-    if (args->HEADER != NULL) {
-        for (i = 0; args->HEADER[i] != NULL; i++) {
-            ag_printf("AGet: %s\n", args->HEADER[i]);
+    if (custom_headers != NULL) {
+        for (i = 0; custom_headers[i] != NULL; i++) {
+            ag_printf("AGet: %s\n", custom_headers[i]);
         }
     }
     ag_flush_msg();
@@ -1066,9 +1224,10 @@ ag_setup_cookie_jar(struct HttpSession *session, STRPTR url, STRPTR cookiefile)
  * ag_selftest - offline amihttp.library API coverage (no HttpTransactionPerform).
  */
 static LONG
-ag_selftest(STRPTR url)
+ag_selftest(void)
 {
     struct HttpSession *session;
+    STRPTR fixture;
     LONG err;
     LONG rv;
 
@@ -1076,13 +1235,14 @@ ag_selftest(STRPTR url)
     err = 0;
     ag_step = 0;
     ag_test_fails = 0;
+    fixture = AG_TEST_URL;
 
     ag_msgfh = (BPTR)ErrorOutput();
     if (ag_msgfh == 0) {
         ag_msgfh = Output();
     }
 
-    ag_printf("AGet: self-test url=\"%s\"\n", url);
+    ag_printf("AGet: self-test fixture=\"%s\"\n", fixture);
     ag_flush_msg();
 
     HttpBase = OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION);
@@ -1099,9 +1259,10 @@ ag_selftest(STRPTR url)
         err = HttpError();
         goto st_cleanup;
     }
+    SetHttpError(0);
 
     ag_test_tier0();
-    ag_test_url_utils(url);
+    ag_test_url_utils(fixture);
 
     ag_step_log("Tier1: NewHttpSession");
     session = NewHttpSession();
@@ -1113,8 +1274,8 @@ ag_selftest(STRPTR url)
     }
 
     ag_test_session(session);
-    ag_test_cookies(session, url);
-    ag_test_transaction(session, url);
+    ag_test_cookies(session, fixture);
+    ag_test_transaction(session, fixture);
     ag_test_tier3_offline(session);
 
 st_cleanup:
@@ -1208,10 +1369,17 @@ ag_read_body(struct HttpTransaction *txn, LONG expect_cl, LONG *out_total)
 
         n = HttpTransactionReadBody(txn, (APTR)buf, (ULONG)sizeof(buf));
         if (ag_verbose || ag_test_mode) {
+            char chunkbuf[64];
+
             ag_printf("AGet:     HttpTransactionReadBody -> %ld\n", n);
             ag_printf("AGet:     HttpTransactionGetBytesReceived -> %ld\n",
                 (LONG)HttpTransactionGetBytesReceived(txn));
             ag_log_errno("after ReadBody");
+            if (n > 0) {
+                sprintf(chunkbuf, "ReadBody chunk %ld (%ld bytes)",
+                    chunk, n);
+                ag_et_log(chunkbuf);
+            }
         }
 
         if (n == 0) {
@@ -1303,6 +1471,7 @@ ag_download(struct AGetArgs *args)
     struct HttpCookieJar *cookie_jar;
     STRPTR user_agent;
     STRPTR method;
+    STRPTR fetch_url;
     STRPTR hdr;
     STRPTR colon;
     LONG err;
@@ -1316,15 +1485,22 @@ ag_download(struct AGetArgs *args)
     BOOL performed;
     BPTR outfh;
     BOOL close_out;
+    ULONG et_perform_ms;
+    ULONG et_body_ms;
+    ULONG et_total_ms;
 
     session = NULL;
     txn = NULL;
     cookie_jar = NULL;
+    fetch_url = NULL;
     outfh = 0;
     close_out = FALSE;
     err = 0;
     body_total = 0;
     notify_sig = (ULONG)-1;
+    et_perform_ms = 0UL;
+    et_body_ms = 0UL;
+    et_total_ms = 0UL;
     ag_step = 0;
     method = (STRPTR)"GET";
 
@@ -1338,9 +1514,16 @@ ag_download(struct AGetArgs *args)
         return err;
     }
 
+    fetch_url = ag_normalize_url(args->URL);
+    if (fetch_url == NULL) {
+        ag_printf("AGet: invalid URL\n");
+        ag_flush_msg();
+        return ERROR_HTTP_INVALID_URL;
+    }
+
     if (ag_verbose || ag_test_mode) {
         ag_printf("AGet: url=\"%s\" to=%s ua=\"%s\"\n",
-            args->URL,
+            fetch_url,
             args->TO ? args->TO : (STRPTR)"(stdout)",
             user_agent);
         ag_flush_msg();
@@ -1388,7 +1571,7 @@ ag_download(struct AGetArgs *args)
         goto dl_cleanup;
     }
 
-    cookie_jar = ag_setup_cookie_jar(session, args->URL, args->COOKIEFILE);
+    cookie_jar = ag_setup_cookie_jar(session, fetch_url, args->COOKIEFILE);
 
     txn = NewHttpTransaction(session);
     if (txn == NULL) {
@@ -1403,7 +1586,7 @@ ag_download(struct AGetArgs *args)
 
     rv = SetHttpTransactionAttrs(
         txn,
-        HTTA_URL,        (ULONG)args->URL,
+        HTTA_URL,        (ULONG)fetch_url,
         HTTA_METHOD,     (ULONG)method,
         HTTA_USERAGENT,  (ULONG)user_agent,
         HTTA_NO_CACHE,   (ULONG)TRUE,
@@ -1451,14 +1634,16 @@ ag_download(struct AGetArgs *args)
         }
     }
 
-    ag_log_request_headers(args, method, user_agent, cookie_jar);
+    ag_log_request_headers(fetch_url, method, user_agent, cookie_jar, args->HEADER);
 
     if (ag_verbose || ag_test_mode) {
         ag_printf("AGet: --- Request ---\n");
-        ag_printf("AGet: %s %s HTTP/1.1\n", method, args->URL);
+        ag_printf("AGet: %s %s HTTP/1.1\n", method, fetch_url);
         ag_printf("AGet: User-Agent: %s\n", user_agent);
         ag_flush_msg();
     }
+
+    ag_et_init();
 
     performed = FALSE;
     wait_iter = 0;
@@ -1487,6 +1672,11 @@ ag_download(struct AGetArgs *args)
         performed = TRUE;
     }
 
+    et_perform_ms = ag_et_delta_ms();
+    if (ag_verbose || ag_test_mode) {
+        ag_et_log("HttpTransactionPerform complete");
+    }
+
     if (!performed) {
         err = ERROR_HTTP_PROTOCOL;
         goto dl_cleanup;
@@ -1494,7 +1684,7 @@ ag_download(struct AGetArgs *args)
 
     status = HttpTransactionGetStatusCode(txn);
     clen = HttpTransactionGetContentLength(txn);
-    ag_log_peer_cert(txn, args->URL);
+    ag_log_peer_cert(txn, fetch_url);
 
     ag_log_response_headers(txn);
 
@@ -1535,11 +1725,14 @@ ag_download(struct AGetArgs *args)
         } else {
             ag_log_head_summary(txn);
         }
+        ag_et_summary(et_perform_ms, 0UL, et_perform_ms, 0);
         err = 0;
         goto dl_cleanup;
     }
 
     err = ag_read_body(txn, clen, &body_total);
+    et_body_ms = ag_et_delta_ms();
+    et_total_ms = et_perform_ms + et_body_ms;
     if (err != 0) {
         ag_log_fail("ReadBody", err);
         goto dl_cleanup;
@@ -1562,6 +1755,9 @@ ag_download(struct AGetArgs *args)
         ag_printf("\n");
         ag_flush_msg();
     }
+    if (err == 0) {
+        ag_et_summary(et_perform_ms, et_body_ms, et_total_ms, body_total);
+    }
 
 dl_cleanup:
     if (notify_sig != (ULONG)-1) {
@@ -1583,6 +1779,10 @@ dl_cleanup:
         }
         DisposeHttpCookieJar(cookie_jar);
     }
+    if (fetch_url != NULL) {
+        FreeMem(fetch_url, (ULONG)strlen((const char *)fetch_url) + 1);
+        fetch_url = NULL;
+    }
     if (close_out && outfh != 0) {
         Close(outfh);
     }
@@ -1590,6 +1790,7 @@ dl_cleanup:
         CloseLibrary((struct Library *)HttpBase);
         HttpBase = NULL;
     }
+    ag_et_fini();
     return err;
 }
 
@@ -1608,7 +1809,7 @@ ag_usage(void)
         "TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M\n"
         "\n"
         "Required (fetch):\n"
-        "  URL            http:// or https:// URL to fetch\n"
+        "  URL            URL to fetch (http:// or https://; scheme defaults to http)\n"
         "\n"
         "Output destination:\n"
         "  TO/K             write decoded body to this file (default: stdout)\n"
@@ -1629,14 +1830,13 @@ ag_usage(void)
         "  QUIET/S          stderr: errors only; stdout/file: body only\n"
         "  HEADERS/S        stderr: request/response headers (no API trace)\n"
         "  VERBOSE/S        stderr: full amihttp API step trace\n"
-        "  TEST/S           offline API self-test (no network fetch)\n"
+        "  TEST/S           offline API self-test (URL/K ignored; fixed fixture)\n"
         "\n"
         "Examples:\n"
         "  AGet URL=https://www.amigazen.com\n"
         "  AGet URL=http://example.com TO=RAM:page.html QUIET\n"
         "  AGet URL=https://host/ HEAD VERBOSE\n"
-        "  AGet TEST\n"
-        "  AGet TEST URL=http://example.com/\n";
+        "  AGet TEST\n";
 
     fh = Output();
     Write(fh, (APTR)ag_usage_msg, (ULONG)(sizeof(ag_usage_msg) - 1));
@@ -1648,7 +1848,6 @@ main(int argc, char **argv)
     struct RDArgs *rdargs;
     struct AGetArgs args;
     LONG err;
-    STRPTR test_url;
 
     (void)argc;
     (void)argv;
@@ -1658,7 +1857,6 @@ main(int argc, char **argv)
     ag_headers = FALSE;
     ag_test_mode = FALSE;
     ag_errno_slot = 0;
-    test_url = NULL;
 
     memset(&args, 0, sizeof(args));
     rdargs = ReadArgs((STRPTR)AGET_TEMPLATE, (LONG *)&args, NULL);
@@ -1670,11 +1868,7 @@ main(int argc, char **argv)
     if (args.TEST) {
         ag_test_mode = TRUE;
         ag_verbose = TRUE;
-        test_url = args.URL;
-        if (test_url == NULL || test_url[0] == '\0') {
-            test_url = AG_TEST_URL;
-        }
-        err = ag_selftest(test_url);
+        err = ag_selftest();
         FreeArgs(rdargs);
         if (err != 0) {
             ag_msgfh = (BPTR)ErrorOutput();

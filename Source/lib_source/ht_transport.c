@@ -234,7 +234,8 @@ ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
             ht_transport_disconnect(base, conn);
             return ERROR_HTTP_OUT_OF_MEMORY;
         }
-        rc = ht_ssl_attach_socket(base, conn->hc_SslCtx, sock, host, ssl_verify);
+        rc = ht_ssl_attach_socket(base, conn->hc_SslCtx, sock, host, ssl_verify,
+            timeout_secs, NULL);
         if (rc != 0) {
             ht_transport_disconnect(base, conn);
             return rc;
