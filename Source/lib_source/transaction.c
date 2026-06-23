@@ -771,20 +771,21 @@ ht_txn_perform_sync(struct HttpTransaction *txn)
 
 LONG
 __ASM__ __SAVE_DS__ HttpTransactionPerform(
-    __REG__(a0, struct HttpTransaction *txn))
+    __REG__(a0, struct HttpTransaction *txn),
+    __REG__(a6, struct AmiHttpBase *libbase))
 {
-    LONG rc;
-
-    rc = ht_txn_perform_sync(txn);
-    return rc;
+    ht_lvo_bind(libbase);
+    return ht_txn_perform_sync(txn);
 }
 
 LONG
 __ASM__ __SAVE_DS__ HttpTransactionPerformAsync(
-    __REG__(a0, struct HttpTransaction *txn))
+    __REG__(a0, struct HttpTransaction *txn),
+    __REG__(a6, struct AmiHttpBase *libbase))
 {
     LONG rc;
 
+    ht_lvo_bind(libbase);
     if (!ht_check_handle(txn ? txn->ht_Magic : 0, HT_MAGIC_TXN)) {
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
     }

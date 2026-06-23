@@ -28,6 +28,7 @@ extern struct AmiHttpBase *HttpBase;
 struct HtAsyncJob
 {
     struct HttpTransaction *hj_Txn;
+    struct AmiHttpBase     *hj_Base;
     struct Task            *hj_Worker;
     LONG                    hj_Result;
 };
@@ -62,6 +63,7 @@ ht_async_worker(APTR args)
         RemTask(NULL);
         return;
     }
+    ht_lvo_bind(job->hj_Base);
     txn = job->hj_Txn;
     job->hj_Result = ht_txn_perform_sync(txn);
     if (txn != NULL) {
@@ -94,6 +96,7 @@ ht_async_start(struct HttpTransaction *txn)
         return ERROR_HTTP_OUT_OF_MEMORY;
     }
     job->hj_Txn = txn;
+    job->hj_Base = HttpBase;
     strcpy((char *)name, "amihttp");
     task = CreateTask((STRPTR)name, 0, (APTR)ht_async_worker, HT_ASYNC_STACK,
         (APTR)job, 0);

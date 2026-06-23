@@ -229,6 +229,7 @@ ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
             ht_transport_disconnect(base, conn);
             return rc;
         }
+        conn->hc_SslTaskHeld = TRUE;
         conn->hc_SslCtx = ht_ssl_create(host);
         if (conn->hc_SslCtx == NULL) {
             ht_transport_disconnect(base, conn);
@@ -254,9 +255,12 @@ ht_transport_disconnect(struct AmiHttpBase *base, struct HtConnection *conn)
         ht_ssl_close(conn->hc_SslCtx);
         ht_ssl_destroy(conn->hc_SslCtx);
         conn->hc_SslCtx = NULL;
+    }
+    if (conn->hc_SslTaskHeld) {
         if (base != NULL) {
             ht_transport_task_ssl_release(base);
         }
+        conn->hc_SslTaskHeld = FALSE;
     }
     if (conn->hc_Sock >= 0) {
         ht_bind_socketbase(base);

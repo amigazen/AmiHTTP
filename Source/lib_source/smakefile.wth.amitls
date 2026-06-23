@@ -5,7 +5,7 @@ FROM     StartUp.o
          ht_alloc.o
          ht_error.o
          ht_ssl_common.o
-         ht_ssl_amissl.o
+         ht_ssl_amitls.o
          ht_transport.o
          ht_proxy.o
          ht_pool.o

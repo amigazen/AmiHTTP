@@ -4,7 +4,8 @@
  *
  * LibInit.c - ROMTag, DataTab, and dependency open/close for amihttp.library
  *
- * bsdsocket and amisslmaster open lazily on first HTTP/HTTPS use.
+ * bsdsocket opens lazily on first HTTP/HTTPS use.
+ * TLS: AmiSSL (default) or amitls.library when AMIHTTP_USE_AMITLS is defined.
  * utility.library v47+ is required for SNPrintf/Strncpy/Strncat in ht_url.c.
  */
 
@@ -24,6 +25,7 @@
 #include "private/ht_build.h"
 #include "private/ht_debug.h"
 #include "private/ht_internal.h"
+#include "private/ht_ssl_config.h"
 #include "compiler.h"
 
 #define HTLIBNAME "amihttp"
@@ -48,12 +50,16 @@ L_OpenLibs(struct AmiHttpBase *base)
 
     if (base != NULL) {
         base->ahb_SocketBase = NULL;
+#ifdef AMIHTTP_USE_AMITLS
+        base->ahb_AmiTlsBase = NULL;
+#else
         base->ahb_AmiSSLMasterBase = NULL;
         base->ahb_AmiSSLBase = NULL;
         base->ahb_AmiSSLExtBase = NULL;
+        base->ahb_AmiSSLInitCount = 0;
+#endif
         base->ahb_DOSBase = NULL;
         base->ahb_UtilityBase = NULL;
-        base->ahb_AmiSSLInitCount = 0;
         base->ahb_ZBase = NULL;
         base->ahb_ZDecodeReady = FALSE;
     }
@@ -112,10 +118,17 @@ L_CloseLibs(VOID)
     ht_transport_global_shutdown(HttpBase);
     ht_timer_shutdown();
 
+#ifdef AMIHTTP_USE_AMITLS
+    if (HttpBase->ahb_AmiTlsBase != NULL) {
+        CloseLibrary(HttpBase->ahb_AmiTlsBase);
+        HttpBase->ahb_AmiTlsBase = NULL;
+    }
+#else
     if (HttpBase->ahb_AmiSSLMasterBase != NULL) {
         CloseLibrary(HttpBase->ahb_AmiSSLMasterBase);
         HttpBase->ahb_AmiSSLMasterBase = NULL;
     }
+#endif
 
     if (HttpBase->ahb_SocketBase != NULL) {
         CloseLibrary(HttpBase->ahb_SocketBase);

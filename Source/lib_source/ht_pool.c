@@ -366,6 +366,26 @@ ht_pool_release(struct AmiHttpBase *base, struct HtConnection *conn, BOOL keepal
 }
 
 VOID
+ht_pool_flush(struct AmiHttpBase *base)
+{
+    struct HtConnection *conn;
+    struct HtConnection *next;
+
+    if (base == NULL) {
+        return;
+    }
+    ObtainSemaphore(&base->ahb_PoolSema);
+    for (conn = (struct HtConnection *)base->ahb_PoolList.lh_Head;
+         conn != NULL && conn->hc_Node.ln_Succ != NULL;
+         conn = next) {
+        next = (struct HtConnection *)conn->hc_Node.ln_Succ;
+        Remove(&conn->hc_Node);
+        ht_connection_free(base, conn);
+    }
+    ReleaseSemaphore(&base->ahb_PoolSema);
+}
+
+VOID
 ht_pool_shutdown(struct AmiHttpBase *base)
 {
     struct HtConnection *conn;

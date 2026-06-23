@@ -1562,7 +1562,7 @@ ag_download(struct AGetArgs *args)
         HTSA_USERAGENT,        (ULONG)user_agent,
         HTSA_FOLLOW_REDIRECTS, (ULONG)(args->NOREDIR ? FALSE : TRUE),
         HTSA_MAX_REDIRECTS,    (ULONG)10,
-        HTSA_KEEPALIVE,        (ULONG)TRUE,
+        HTSA_KEEPALIVE,        (ULONG)FALSE,
         HTSA_CONNECT_TIMEOUT,  (ULONG)60,
         HTSA_READ_TIMEOUT,     (ULONG)120,
         TAG_DONE);
@@ -1758,6 +1758,10 @@ ag_download(struct AGetArgs *args)
     }
     if (err == 0) {
         ag_et_summary(et_perform_ms, et_body_ms, et_total_ms, body_total);
+        if (!ag_quiet) {
+            ag_printf("AGet: OK\n");
+            ag_flush_msg();
+        }
     }
 
 dl_cleanup:
@@ -1909,9 +1913,6 @@ main(int argc, char **argv)
         }
         ag_log_fail("AGet", err);
         return (err > 0 && err < 256) ? err : 20;
-    }
-    if (ag_verbose) {
-        ag_printf("AGet: OK\n");
     }
     return 0;
 }

@@ -379,6 +379,7 @@ ht_transport_connect_route(struct AmiHttpBase *base, struct HtConnection *conn,
             ht_transport_disconnect(base, conn);
             return rc;
         }
+        conn->hc_SslTaskHeld = TRUE;
         conn->hc_SslCtx = ht_ssl_create(route->hr_OriginHost);
         if (conn->hc_SslCtx == NULL) {
             ht_transport_disconnect(base, conn);

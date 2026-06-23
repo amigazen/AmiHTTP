@@ -1357,6 +1357,10 @@ ht_http_body_finish(struct AmiHttpBase *base, struct HttpTransaction *txn)
             (txn->ht_Flags & HTF_KEEPALIVE) && (txn->ht_Flags & HTF_KEEPALIVE_REQ)) {
             keepalive = TRUE;
         }
+        if (keepalive && base != NULL &&
+            !ht_transport_conn_idle(base, txn->ht_Conn)) {
+            keepalive = FALSE;
+        }
         ht_pool_release(base, txn->ht_Conn, keepalive);
         txn->ht_Conn = NULL;
     }

@@ -197,6 +197,11 @@ __ASM__ __SAVE_DS__ InitLib(
 struct AmiHttpBase *
 __ASM__ __SAVE_DS__ OpenLib(__REG__(a6, struct AmiHttpBase *base))
 {
+    /*
+     * LVO bodies use the library-global HttpBase; refresh it on every open
+     * (InitLib runs once at load, not on each OpenLibrary from a client).
+     */
+    HttpBase = base;
     base->ahb_LibNode.lib_OpenCnt++;
     base->ahb_LibNode.lib_Flags &= ~LIBF_DELEXP;
     /* Clear stale IoErr-style state from a previous client open. */
@@ -213,6 +218,12 @@ __ASM__ __SAVE_DS__ CloseLib(__REG__(a6, struct AmiHttpBase *base))
         if (base->ahb_LibNode.lib_Flags & LIBF_DELEXP) {
             return ExpungeLib(base);
         }
+        /*
+         * Drop idle keep-alive sockets only.  Do not CloseAmiSSL here — the
+         * library segment stays resident and the next OpenLibrary must find
+         * AmiSSL/task TLS state consistent (full teardown is ExpungeLib).
+         */
+        ht_pool_flush(base);
     }
 
     return 0;

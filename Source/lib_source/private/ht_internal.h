@@ -131,6 +131,12 @@ struct HtConnection
     BOOL                hc_ViaProxy;
     STRPTR              hc_OriginHost;
     ULONG               hc_OriginPort;
+    /*
+     * TRUE after ht_transport_task_ssl_ensure() for this connection.
+     * Paired with ht_transport_task_ssl_release() in disconnect even when
+     * hc_SslCtx was never created (create/attach failure paths).
+     */
+    BOOL                hc_SslTaskHeld;
     UBYTE              *hc_IoBuf;
     ULONG               hc_IoLen;
     ULONG               hc_IoPos;
@@ -252,6 +258,7 @@ struct HttpCookieJar
  */
 
 VOID ht_sync_proto_bases(struct AmiHttpBase *base);
+VOID ht_lvo_bind(struct AmiHttpBase *base);
 
 /* ht_alloc.c */
 APTR ht_alloc(ULONG size, ULONG flags);
@@ -285,7 +292,7 @@ LONG ht_transport_recv(struct AmiHttpBase *base, struct HtConnection *conn,
     APTR buf, ULONG len, ULONG timeout_secs);
 BOOL ht_transport_conn_idle(struct AmiHttpBase *base, struct HtConnection *conn);
 
-/* ht_ssl.c */
+/* ht_ssl_*.c - TLS backends (AmiSSL default, amitls when AMIHTTP_USE_AMITLS) */
 struct HtSsl *ht_ssl_create(STRPTR hostname);
 VOID ht_ssl_destroy(struct HtSsl *s);
 LONG ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s,
@@ -311,6 +318,7 @@ struct HtConnection *ht_pool_acquire(struct AmiHttpBase *base,
     struct HttpTransaction *txn);
 VOID ht_pool_release(struct AmiHttpBase *base, struct HtConnection *conn,
     BOOL keepalive);
+VOID ht_pool_flush(struct AmiHttpBase *base);
 VOID ht_pool_shutdown(struct AmiHttpBase *base);
 VOID ht_timer_shutdown(VOID);
 BOOL ht_timer_get_time(struct timeval *tv);

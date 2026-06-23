@@ -32,10 +32,14 @@ struct AmiHttpBase
 
     /* Wrapped dependencies - never exposed to callers */
     struct Library         *ahb_SocketBase;
+#ifdef AMIHTTP_USE_AMITLS
+    struct Library         *ahb_AmiTlsBase;
+#else
     struct Library         *ahb_AmiSSLMasterBase;
     struct Library         *ahb_AmiSSLBase;
     struct Library         *ahb_AmiSSLExtBase;
     ULONG                   ahb_AmiSSLInitCount;
+#endif
     struct Library         *ahb_DOSBase;
     struct Library         *ahb_UtilityBase;
     struct Library         *ahb_ZBase;          /* z.library (inflate) */

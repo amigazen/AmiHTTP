@@ -12,8 +12,11 @@
 #include <libraries/amihttp.h>
 #include "compiler.h"
 
-LONG __ASM__ __SAVE_DS__ HttpBaseTagList(__REG__(a0, struct TagItem *tags));
-LONG __ASM__ __SAVE_DS__ HttpError(void);
+struct AmiHttpBase;
+
+LONG __ASM__ __SAVE_DS__ HttpBaseTagList(__REG__(a0, struct TagItem *tags),
+    __REG__(a6, struct AmiHttpBase *libbase));
+LONG __ASM__ __SAVE_DS__ HttpError(__REG__(a6, struct AmiHttpBase *libbase));
 STRPTR __ASM__ __SAVE_DS__ HttpGetErrorString(__REG__(d0, LONG code));
 
 struct HttpSession *__ASM__ __SAVE_DS__ NewHttpSession(void);
@@ -28,8 +31,10 @@ VOID __ASM__ __SAVE_DS__ DisposeHttpTransaction(__REG__(a0, struct HttpTransacti
 LONG __ASM__ __SAVE_DS__ SetHttpTransactionAttrsA(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, struct TagItem *tags));
 LONG __ASM__ __SAVE_DS__ HttpTransactionAddHeader(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, STRPTR hdr_name), __REG__(a2, STRPTR value));
 VOID __ASM__ __SAVE_DS__ HttpTransactionClearHeaders(__REG__(a0, struct HttpTransaction *txn));
-LONG __ASM__ __SAVE_DS__ HttpTransactionPerform(__REG__(a0, struct HttpTransaction *txn));
-LONG __ASM__ __SAVE_DS__ HttpTransactionPerformAsync(__REG__(a0, struct HttpTransaction *txn));
+LONG __ASM__ __SAVE_DS__ HttpTransactionPerform(__REG__(a0, struct HttpTransaction *txn),
+    __REG__(a6, struct AmiHttpBase *libbase));
+LONG __ASM__ __SAVE_DS__ HttpTransactionPerformAsync(__REG__(a0, struct HttpTransaction *txn),
+    __REG__(a6, struct AmiHttpBase *libbase));
 BOOL __ASM__ __SAVE_DS__ HttpTransactionIsComplete(__REG__(a0, struct HttpTransaction *txn));
 LONG __ASM__ __SAVE_DS__ WaitHttpTransaction(__REG__(a0, struct HttpTransaction *txn), __REG__(d0, ULONG timeout_secs));
 VOID __ASM__ __SAVE_DS__ AbortHttpTransaction(__REG__(a0, struct HttpTransaction *txn));
@@ -77,7 +82,8 @@ VOID __ASM__ __SAVE_DS__ FlushHttpCookieJar(__REG__(a0, struct HttpCookieJar *ja
 LONG __ASM__ __SAVE_DS__ SetHttpCookie(__REG__(a0, struct HttpCookieJar *jar), __REG__(a1, STRPTR cookie_line));
 STRPTR __ASM__ __SAVE_DS__ GetHttpCookieString(__REG__(a0, struct HttpCookieJar *jar), __REG__(a1, STRPTR url));
 
-LONG __ASM__ __SAVE_DS__ SetHttpError(__REG__(d0, LONG code));
+LONG __ASM__ __SAVE_DS__ SetHttpError(__REG__(d0, LONG code),
+    __REG__(a6, struct AmiHttpBase *libbase));
 LONG __ASM__ __SAVE_DS__ HttpFault(__REG__(d0, LONG code), __REG__(a0, STRPTR header), __REG__(a1, STRPTR buffer), __REG__(d1, LONG buflen));
 
 STRPTR __ASM__ __SAVE_DS__ HttpUriSchemePart(__REG__(a0, STRPTR url));

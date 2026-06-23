@@ -15,6 +15,12 @@
 extern struct AmiHttpBase *HttpBase;
 
 VOID
+ht_lvo_bind(struct AmiHttpBase *base)
+{
+    HttpBase = base;
+}
+
+VOID
 ht_set_error(LONG code)
 {
     if (HttpBase != NULL) {

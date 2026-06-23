@@ -24,10 +24,12 @@ extern struct AmiHttpBase *HttpBase;
 
 LONG
 __ASM__ __SAVE_DS__ HttpBaseTagList(
-    __REG__(a0, struct TagItem *tags))
+    __REG__(a0, struct TagItem *tags),
+    __REG__(a6, struct AmiHttpBase *libbase))
 {
     struct TagItem *t;
 
+    ht_lvo_bind(libbase);
     htDbgPut("HttpBaseTagList");
     if (HttpBase == NULL) {
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
@@ -81,8 +83,10 @@ __ASM__ __SAVE_DS__ HttpBaseTagList(
  * IoErr() equivalent: extra error detail after an LVO returned FALSE/0.
  */
 LONG
-__ASM__ __SAVE_DS__ HttpError(void)
+__ASM__ __SAVE_DS__ HttpError(
+    __REG__(a6, struct AmiHttpBase *libbase))
 {
+    ht_lvo_bind(libbase);
     if (HttpBase == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
     }
@@ -94,10 +98,12 @@ __ASM__ __SAVE_DS__ HttpError(void)
  */
 LONG
 __ASM__ __SAVE_DS__ SetHttpError(
-    __REG__(d0, LONG code))
+    __REG__(d0, LONG code),
+    __REG__(a6, struct AmiHttpBase *libbase))
 {
     LONG prev;
 
+    ht_lvo_bind(libbase);
     if (HttpBase == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
     }

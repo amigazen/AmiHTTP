@@ -13,6 +13,7 @@ INCLUDEDIR=/include
 INCLUDEDIR=///z.library/SDK/Include_H
 INCLUDEDIR=SDK:Include_h
 INCLUDEDIR=netinclude:
+INCLUDEDIR=///amitls/SDK/Include_H
 INCLUDEDIR=sslinclude:
 MATH=STANDARD
 UTILLIB
