@@ -5,8 +5,8 @@
  * AGet.c - wget-style HTTP/HTTPS client for AmigaOS (amihttp.library).
  *
  * ReadArgs template (must match ag_usage_msg):
- *   URL,TO/K,USERAGENT/K,HEADER/K,HEAD/S,NOREDIR/S,ASYNC/S,
- *   VERBOSE/S,QUIET/S,TEST/S,COOKIEFILE/K
+ *   URL,TO/K,USERAGENT/K,HEAD/S,NOREDIR/S,ASYNC/S,VERBOSE/S,QUIET/S,
+ *   TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M
  *
  * Output routing (AmigaDOS):
  *   - Response body  -> stdout, or TO/K file when given
@@ -16,6 +16,7 @@
  *   Default  - one-line HTTP status on stderr; TLS cert summary for https;
  *              body to stdout or TO/K
  *   QUIET/S  - body (or TO file) only; stderr used for errors only
+ *   HEADERS/S- request/response header dump on stderr (no API trace)
  *   VERBOSE/S- step-by-step amihttp API trace on stderr
  *   TEST/S   - VERBOSE plus Tier0/URL/cookie/Tier3 API smoke tests, then fetch
  */
@@ -45,21 +46,21 @@ static const char stack_cookie[] = "$STACK: 4096";
     "URL," \
     "TO/K," \
     "USERAGENT/K," \
-    "HEADER/K," \
     "HEAD/S," \
     "NOREDIR/S," \
     "ASYNC/S," \
     "VERBOSE/S," \
     "QUIET/S," \
     "TEST/S," \
-    "COOKIEFILE/K"
+    "COOKIEFILE/K," \
+    "HEADERS/S," \
+    "HEADER/K/M"
 
 struct AGetArgs
 {
     STRPTR  URL;
     STRPTR  TO;
     STRPTR  USERAGENT;
-    STRPTR *HEADER;
     LONG    HEAD;
     LONG    NOREDIR;
     LONG    ASYNC;
@@ -67,6 +68,8 @@ struct AGetArgs
     LONG    QUIET;
     LONG    TEST;
     STRPTR  COOKIEFILE;
+    LONG    HEADERS;
+    STRPTR *HEADER;
 };
 
 static ULONG  ag_step;
@@ -75,7 +78,10 @@ static BPTR   ag_msgfh;
 static BPTR   ag_bodyfh;
 static BOOL   ag_verbose;
 static BOOL   ag_quiet;
+static BOOL   ag_headers;
 static BOOL   ag_test_mode;
+static BOOL   ag_body_console;
+static LONG   ag_body_last_byte;
 
 #define AG_EMPTY_STR    ((STRPTR)"")
 
@@ -127,6 +133,8 @@ ag_open_output(struct AGetArgs *args, BPTR *outfh, BOOL *close_out)
     }
     *outfh = 0;
     *close_out = FALSE;
+    ag_body_console = FALSE;
+    ag_body_last_byte = -1;
     if (args->TO != NULL && args->TO[0] != '\0') {
         *outfh = Open(args->TO, MODE_NEWFILE);
         if (*outfh == 0) {
@@ -138,6 +146,7 @@ ag_open_output(struct AGetArgs *args, BPTR *outfh, BOOL *close_out)
         ag_bodyfh = *outfh;
     } else {
         ag_bodyfh = Output();
+        ag_body_console = TRUE;
     }
     return 0;
 }
@@ -228,6 +237,72 @@ ag_free_str(STRPTR s)
     if (s != NULL) {
         FreeMem(s, (ULONG)strlen((const char *)s) + 1);
     }
+}
+
+static VOID
+ag_log_header_list(struct List *headers)
+{
+    struct HttpHeader *hh;
+
+    if (headers == NULL) {
+        return;
+    }
+    for (hh = (struct HttpHeader *)headers->lh_Head;
+         hh != NULL && hh->hh_Node.ln_Succ != NULL;
+         hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
+        if (hh->hh_Name != NULL && hh->hh_Value != NULL) {
+            ag_printf("AGet: %s: %s\n", hh->hh_Name, hh->hh_Value);
+        }
+    }
+    ag_flush_msg();
+}
+
+static VOID
+ag_log_request_headers(struct AGetArgs *args, STRPTR method,
+    STRPTR user_agent, struct HttpCookieJar *jar)
+{
+    STRPTR cstr;
+    LONG i;
+
+    if (!ag_headers) {
+        return;
+    }
+    ag_printf("AGet: --- Request ---\n");
+    ag_printf("AGet: %s %s HTTP/1.1\n", method, args->URL);
+    ag_printf("AGet: User-Agent: %s\n", user_agent);
+    ag_printf("AGet: Cache-Control: no-cache\n");
+    ag_printf("AGet: Pragma: no-cache\n");
+    if (jar != NULL) {
+        cstr = GetHttpCookieString(jar, args->URL);
+        if (cstr != NULL && cstr[0] != '\0') {
+            ag_printf("AGet: Cookie: %s\n", cstr);
+        }
+        if (cstr != NULL) {
+            ag_free_str(cstr);
+        }
+    }
+    if (args->HEADER != NULL) {
+        for (i = 0; args->HEADER[i] != NULL; i++) {
+            ag_printf("AGet: %s\n", args->HEADER[i]);
+        }
+    }
+    ag_flush_msg();
+}
+
+static VOID
+ag_log_response_headers(struct HttpTransaction *txn)
+{
+    STRPTR sl;
+
+    if (!ag_headers) {
+        return;
+    }
+    ag_printf("AGet: --- Response ---\n");
+    sl = HttpTransactionGetStatusLine(txn);
+    if (sl != NULL) {
+        ag_printf("AGet: %s\n", sl);
+    }
+    ag_log_header_list(HttpTransactionRespHeaders(txn));
 }
 
 static VOID
@@ -358,7 +433,7 @@ ag_log_peer_cert(struct HttpTransaction *txn, STRPTR url)
     struct ParsedUrl *pu;
     LONG rv;
 
-    if (ag_quiet && !ag_verbose) {
+    if (ag_quiet && !ag_verbose && !ag_headers) {
         return;
     }
     pu = ParseHttpUrl(url);
@@ -612,6 +687,25 @@ ag_write_all(BPTR fh, APTR data, LONG len)
     return 0;
 }
 
+/*
+ * Console body output should end with a newline so the shell prompt does not
+ * run onto the last line of the fetched content.  File output (TO/K) is left
+ * byte-for-byte; only append when the body did not already end with '\n'.
+ */
+static VOID
+ag_finish_console_body(void)
+{
+    static const char nl[] = "\n";
+
+    if (!ag_body_console || ag_bodyfh == 0) {
+        return;
+    }
+    if (ag_body_last_byte >= 0 && ag_body_last_byte != '\n') {
+        Write(ag_bodyfh, (APTR)nl, 1);
+    }
+    ag_flush_body();
+}
+
 static LONG
 ag_read_body(struct HttpTransaction *txn, LONG expect_cl, LONG *out_total)
 {
@@ -622,6 +716,7 @@ ag_read_body(struct HttpTransaction *txn, LONG expect_cl, LONG *out_total)
 
     body_total = 0;
     chunk = 0;
+    ag_body_last_byte = -1;
     ag_step_log("Tier2: HttpTransactionReadBody loop");
 
     for (;;) {
@@ -659,6 +754,7 @@ ag_read_body(struct HttpTransaction *txn, LONG expect_cl, LONG *out_total)
         if (ag_write_all(ag_bodyfh, (APTR)buf, n) != 0) {
             return ERROR_HTTP_WRITE_FAILED;
         }
+        ag_body_last_byte = (LONG)buf[n - 1];
         body_total += n;
     }
     if (out_total != NULL) {
@@ -670,7 +766,10 @@ ag_read_body(struct HttpTransaction *txn, LONG expect_cl, LONG *out_total)
 static VOID
 ag_log_status_line(LONG status, LONG clen, BOOL head)
 {
-    if (ag_quiet && !ag_verbose) {
+    if (ag_quiet && !ag_verbose && !ag_headers) {
+        return;
+    }
+    if (ag_headers) {
         return;
     }
     ag_printf("AGet: HTTP %ld", status);
@@ -692,7 +791,10 @@ ag_log_head_summary(struct HttpTransaction *txn)
     STRPTR clen_hdr;
     STRPTR enc;
 
-    if (ag_quiet && !ag_verbose) {
+    if (ag_quiet && !ag_verbose && !ag_headers) {
+        return;
+    }
+    if (ag_headers) {
         return;
     }
     sl = HttpTransactionGetStatusLine(txn);
@@ -805,7 +907,6 @@ ag_download(struct AGetArgs *args)
         HTSA_KEEPALIVE,        (ULONG)TRUE,
         HTSA_CONNECT_TIMEOUT,  (ULONG)60,
         HTSA_READ_TIMEOUT,     (ULONG)120,
-        HTSA_ACCEPT_ENCODING,  (ULONG)"gzip, deflate",
         TAG_DONE);
     if (!rv) {
         ag_log_fail("SetHttpSessionAttrs", HttpError());
@@ -882,6 +983,8 @@ ag_download(struct AGetArgs *args)
             (STRPTR)"X-AGet-Test", (STRPTR)"1");
     }
 
+    ag_log_request_headers(args, method, user_agent, cookie_jar);
+
     if (ag_verbose || ag_test_mode) {
         ag_printf("AGet: --- Request ---\n");
         ag_printf("AGet: %s %s HTTP/1.1\n", method, args->URL);
@@ -924,6 +1027,8 @@ ag_download(struct AGetArgs *args)
     status = HttpTransactionGetStatusCode(txn);
     clen = HttpTransactionGetContentLength(txn);
     ag_log_peer_cert(txn, args->URL);
+
+    ag_log_response_headers(txn);
 
     if (ag_verbose || ag_test_mode) {
         ag_printf("AGet: --- Response ---\n");
@@ -971,6 +1076,7 @@ ag_download(struct AGetArgs *args)
         ag_log_fail("ReadBody", err);
         goto dl_cleanup;
     }
+    ag_finish_console_body();
 
     if (ag_verbose || ag_test_mode) {
         ag_log_txn_getters(txn, "post-body getters");
@@ -980,7 +1086,7 @@ ag_download(struct AGetArgs *args)
         }
         ag_printf(") ---\n");
         ag_flush_msg();
-    } else if (!ag_quiet) {
+    } else if (!ag_quiet && !ag_headers) {
         ag_printf("AGet: received %ld bytes", body_total);
         if (args->TO != NULL && args->TO[0] != '\0') {
             ag_printf(" -> %s", args->TO);
@@ -1030,8 +1136,8 @@ ag_usage(void)
         "  AGet URL=<url> [options]\n"
         "\n"
         "ReadArgs template:\n"
-        "  URL,TO/K,USERAGENT/K,HEADER/K,HEAD/S,NOREDIR/S,ASYNC/S,"
-        "VERBOSE/S,QUIET/S,TEST/S,COOKIEFILE/K\n"
+        "  URL,TO/K,USERAGENT/K,HEAD/S,NOREDIR/S,ASYNC/S,VERBOSE/S,QUIET/S,"
+        "TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M\n"
         "\n"
         "Required:\n"
         "  URL              http:// or https:// URL to fetch\n"
@@ -1041,7 +1147,7 @@ ag_usage(void)
         "\n"
         "Request options:\n"
         "  USERAGENT/K      User-Agent request header (default: AGet/1.0)\n"
-        "  HEADER/K         extra header, repeatable; use \"Name: value\" form\n"
+        "  HEADER/K/M       extra header(s); repeatable \"Name: value\" form\n"
         "  HEAD/S           send HEAD (headers only, no body read)\n"
         "  NOREDIR/S        do not follow 3xx Location redirects\n"
         "  COOKIEFILE/K     load cookies before request; save jar after success\n"
@@ -1053,6 +1159,7 @@ ag_usage(void)
         "  (default)        stderr: HTTP status line + TLS cert (https)\n"
         "                   stdout: response body (or TO/K file)\n"
         "  QUIET/S          stderr: errors only; stdout/file: body only\n"
+        "  HEADERS/S        stderr: request/response headers (no API trace)\n"
         "  VERBOSE/S        stderr: full amihttp API step trace\n"
         "  TEST/S           VERBOSE + Tier0/URL/cookie/Tier3 API smoke tests\n"
         "\n"
@@ -1078,6 +1185,7 @@ main(int argc, char **argv)
 
     ag_verbose = FALSE;
     ag_quiet = FALSE;
+    ag_headers = FALSE;
     ag_test_mode = FALSE;
     ag_errno_slot = 0;
 
@@ -1096,6 +1204,7 @@ main(int argc, char **argv)
 
     ag_verbose = FALSE;
     ag_quiet = FALSE;
+    ag_headers = (BOOL)args.HEADERS;
     if (args.TEST) {
         ag_test_mode = TRUE;
         ag_verbose = TRUE;
