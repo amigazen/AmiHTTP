@@ -23,6 +23,7 @@
 
 #include "private/ht_internal.h"
 #include "private/ht_debug.h"
+#include "private/ht_hooks.h"
 
 #define HT_MAX_RESP_HEADERS 128
 
@@ -208,10 +209,13 @@ ht_copy_line(struct HtConnection *conn, ULONG line_start, ULONG line_len)
 }
 
 static LONG
-ht_add_resp_header(struct HttpTransaction *txn, STRPTR name, STRPTR value)
+ht_add_header_to_list(struct List *list, STRPTR name, STRPTR value)
 {
     struct HttpHeader *hh;
 
+    if (list == NULL) {
+        return ERROR_HTTP_INVALID_HANDLE;
+    }
     hh = (struct HttpHeader *)ht_alloc(sizeof(struct HttpHeader), MEMF_CLEAR);
     if (hh == NULL) {
         return ERROR_HTTP_OUT_OF_MEMORY;
@@ -228,8 +232,17 @@ ht_add_resp_header(struct HttpTransaction *txn, STRPTR name, STRPTR value)
         ht_free(hh);
         return ERROR_HTTP_OUT_OF_MEMORY;
     }
-    AddTail(&txn->ht_RespHeaders, &hh->hh_Node);
+    AddTail(list, &hh->hh_Node);
     return 0;
+}
+
+static LONG
+ht_add_resp_header(struct HttpTransaction *txn, STRPTR name, STRPTR value)
+{
+    if (txn == NULL) {
+        return ERROR_HTTP_INVALID_HANDLE;
+    }
+    return ht_add_header_to_list(&txn->ht_RespHeaders, name, value);
 }
 
 static STRPTR
@@ -342,9 +355,20 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
     }
     if (txn->ht_Session != NULL && txn->ht_Session->hs_AcceptEncoding != NULL &&
         txn->ht_Session->hs_AcceptEncoding[0] != '\0') {
-        sprintf((char *)line, "Accept-Encoding: %s\r\n",
-            txn->ht_Session->hs_AcceptEncoding);
-        strcat((char *)buf, line);
+        /*
+         * Only advertise encodings we can actually decode.
+         * For now, gzip/deflate require a valid open z.library handle.
+         */
+        if (HttpBase != NULL && HttpBase->ahb_ZDecodeReady) {
+            if (HttpBase->ahb_ZBase == NULL) {
+                HttpBase->ahb_ZBase = OpenLibrary((STRPTR)"z.library", 0);
+            }
+        }
+        if (HttpBase != NULL && HttpBase->ahb_ZDecodeReady && HttpBase->ahb_ZBase != NULL) {
+            sprintf((char *)line, "Accept-Encoding: %s\r\n",
+                txn->ht_Session->hs_AcceptEncoding);
+            strcat((char *)buf, line);
+        }
     }
     if (txn->ht_RangeStart >= 0) {
         if (txn->ht_RangeEnd >= txn->ht_RangeStart) {
@@ -600,6 +624,168 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
         txn->ht_Conn->hc_IoPos = body_start;
     }
     ht_conn_compact(txn->ht_Conn);
+    ht_hook_headers_done(txn);
+    return 0;
+}
+
+static VOID
+ht_clear_header_list(struct List *list)
+{
+    struct HttpHeader *hh;
+    struct HttpHeader *next;
+
+    if (list == NULL) {
+        return;
+    }
+    for (hh = (struct HttpHeader *)list->lh_Head;
+         hh != NULL && hh->hh_Node.ln_Succ != NULL;
+         hh = next) {
+        next = (struct HttpHeader *)hh->hh_Node.ln_Succ;
+        Remove(&hh->hh_Node);
+        if (hh->hh_Name) {
+            ht_free(hh->hh_Name);
+        }
+        if (hh->hh_Value) {
+            ht_free(hh->hh_Value);
+        }
+        ht_free(hh);
+    }
+}
+
+static STRPTR
+ht_header_value_list(struct List *list, STRPTR name)
+{
+    struct HttpHeader *hh;
+
+    for (hh = (struct HttpHeader *)list->lh_Head;
+         hh != NULL && hh->hh_Node.ln_Succ != NULL;
+         hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
+        if (ht_str_ieq(hh->hh_Name, name)) {
+            return hh->hh_Value;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Tier 3: parse response headers into caller-owned struct List (HttpHeader nodes).
+ */
+LONG
+ht_http_read_stream_headers(struct AmiHttpBase *base,
+    struct HttpSession *session, struct HtConnection *conn,
+    struct List *resp_headers, STRPTR *status_line, LONG *status_code,
+    LONG *content_length, ULONG *flags)
+{
+    ULONG timeout;
+    ULONG line_start;
+    ULONG line_len;
+    STRPTR line;
+    STRPTR colon;
+    STRPTR name;
+    STRPTR value;
+    LONG rc;
+    LONG code;
+    STRPTR te_val;
+    STRPTR cl_val;
+    ULONG header_count;
+    ULONG body_start;
+
+    if (conn == NULL || resp_headers == NULL || status_line == NULL ||
+        status_code == NULL || content_length == NULL || flags == NULL) {
+        return ERROR_HTTP_INVALID_HANDLE;
+    }
+    timeout = session ? session->hs_ReadTimeout : 0;
+    if (timeout == 0 && HttpBase != NULL) {
+        timeout = HttpBase->ahb_DefaultTimeout;
+    }
+    ht_clear_header_list(resp_headers);
+    *content_length = -1;
+    *flags = 0;
+    rc = ht_conn_ensure_bytes(base, conn, 1, timeout);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = ht_find_crlf(conn, &line_start, &line_len);
+    while (rc == ERROR_HTTP_READ_TIMEOUT) {
+        rc = ht_conn_fill(base, conn, timeout);
+        if (rc != 0) {
+            return rc;
+        }
+        rc = ht_find_crlf(conn, &line_start, &line_len);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    line = ht_copy_line(conn, line_start, line_len);
+    if (line == NULL) {
+        return ERROR_HTTP_OUT_OF_MEMORY;
+    }
+    if (*status_line != NULL) {
+        ht_free(*status_line);
+    }
+    *status_line = line;
+    conn->hc_IoPos = line_start + line_len + 2;
+    code = 0;
+    sscanf(line, "HTTP/%*s %ld", &code);
+    *status_code = code;
+    header_count = 0;
+    for (;;) {
+        if (header_count >= HT_MAX_RESP_HEADERS) {
+            return ERROR_HTTP_PROTOCOL;
+        }
+        rc = ht_conn_ensure_bytes(base, conn, 2, timeout);
+        if (rc != 0) {
+            return rc;
+        }
+        rc = ht_find_crlf(conn, &line_start, &line_len);
+        while (rc == ERROR_HTTP_READ_TIMEOUT) {
+            rc = ht_conn_fill(base, conn, timeout);
+            if (rc != 0) {
+                return rc;
+            }
+            rc = ht_find_crlf(conn, &line_start, &line_len);
+        }
+        if (line_len == 0) {
+            conn->hc_IoPos = line_start + line_len + 2;
+            break;
+        }
+        header_count++;
+        line = ht_copy_line(conn, line_start, line_len);
+        conn->hc_IoPos = line_start + line_len + 2;
+        if (line == NULL) {
+            return ERROR_HTTP_OUT_OF_MEMORY;
+        }
+        colon = strchr(line, ':');
+        if (colon != NULL) {
+            *colon = '\0';
+            name = line;
+            value = colon + 1;
+            while (*value == ' ' || *value == '\t') {
+                value++;
+            }
+            rc = ht_add_header_to_list(resp_headers, name, value);
+            if (rc != 0) {
+                ht_free(line);
+                return rc;
+            }
+        }
+        ht_free(line);
+    }
+    te_val = ht_header_value_list(resp_headers, (STRPTR)"Transfer-Encoding");
+    cl_val = ht_header_value_list(resp_headers, (STRPTR)"Content-Length");
+    if (cl_val != NULL) {
+        *content_length = (LONG)atol((char *)cl_val);
+    }
+    if (te_val != NULL && strstr(te_val, "chunked") != NULL) {
+        *flags |= HTF_CHUNKED;
+        *content_length = -1;
+    }
+    rc = ht_conn_sync_body_start(conn, &body_start);
+    if (rc != 0) {
+        return rc;
+    }
+    conn->hc_IoPos = body_start;
+    ht_conn_compact(conn);
     return 0;
 }
 
@@ -866,6 +1052,7 @@ ht_http_read_body_chunked(struct AmiHttpBase *base, struct HttpTransaction *txn,
                 txn->ht_ChunkRemain -= take;
                 txn->ht_BytesReceived += take;
                 copied += take;
+                ht_hook_body_chunk(txn, out + copied - take, take);
             }
             if (txn->ht_ChunkRemain == 0) {
                 rc = ht_chunk_skip_data_crlf(base, conn, timeout);
@@ -967,6 +1154,10 @@ ht_http_read_body(struct AmiHttpBase *base, struct HttpTransaction *txn,
         ht_set_txn_error(txn, 0);
         return 0;
     }
+    if (ht_check_txn_abort(txn)) {
+        ht_set_txn_error(txn, ERROR_HTTP_ABORTED);
+        return 0;
+    }
     if (txn->ht_Flags & HTF_GZIP) {
         ht_set_txn_error(txn, ERROR_HTTP_NOT_IMPLEMENTED);
         return 0;
@@ -1045,6 +1236,7 @@ ht_http_read_body(struct AmiHttpBase *base, struct HttpTransaction *txn,
     CopyMem(conn->hc_IoBuf + conn->hc_IoPos, dest, copy);
     conn->hc_IoPos += copy;
     txn->ht_BytesReceived += copy;
+    ht_hook_body_chunk(txn, dest, copy);
 
     if (done_after_send) {
         ht_http_body_finish(base, txn);

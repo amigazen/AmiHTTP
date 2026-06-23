@@ -11,6 +11,8 @@ FROM     StartUp.o
          ht_auth.o
          ht_cookie.o
          ht_http.o
+         ht_async.o
+         ht_hooks.o
          httpcch.o
          session.o
          transaction.o

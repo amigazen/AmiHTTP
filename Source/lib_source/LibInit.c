@@ -37,6 +37,7 @@ extern struct ExecBase *SysBase;
 extern struct AmiHttpBase *HttpBase;
 extern struct DosLibrary *DOSBase;
 extern struct Library *UtilityBase;
+static struct Library *ZBase;
 
 ULONG __SAVE_DS__
 L_OpenLibs(struct AmiHttpBase *base)
@@ -53,7 +54,10 @@ L_OpenLibs(struct AmiHttpBase *base)
         base->ahb_DOSBase = NULL;
         base->ahb_UtilityBase = NULL;
         base->ahb_AmiSSLInitCount = 0;
+        base->ahb_ZBase = NULL;
+        base->ahb_ZDecodeReady = FALSE;
     }
+    ZBase = NULL;
 
     UtilityBase = OpenLibrary("utility.library", 47);
     if (UtilityBase == NULL) {
@@ -117,6 +121,11 @@ L_CloseLibs(VOID)
         CloseLibrary(HttpBase->ahb_UtilityBase);
         HttpBase->ahb_UtilityBase = NULL;
         UtilityBase = NULL;
+    }
+    if (HttpBase->ahb_ZBase != NULL) {
+        CloseLibrary(HttpBase->ahb_ZBase);
+        HttpBase->ahb_ZBase = NULL;
+        ZBase = NULL;
     }
 
     ht_sync_proto_bases(HttpBase);

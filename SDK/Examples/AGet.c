@@ -731,6 +731,7 @@ ag_download(struct AGetArgs *args)
     LONG rv;
     LONG wait_iter;
     LONG i;
+    ULONG notify_sig;
     BOOL performed;
     BPTR outfh;
     BOOL close_out;
@@ -742,6 +743,7 @@ ag_download(struct AGetArgs *args)
     close_out = FALSE;
     err = 0;
     body_total = 0;
+    notify_sig = (ULONG)-1;
     ag_step = 0;
     method = (STRPTR)"GET";
 
@@ -841,6 +843,20 @@ ag_download(struct AGetArgs *args)
         ag_log_fail("SetHttpTransactionAttrs", HttpError());
         err = HttpError();
         goto dl_cleanup;
+    }
+
+    if (args->ASYNC) {
+        notify_sig = AllocSignal(-1L);
+        if (notify_sig == (ULONG)-1) {
+            ag_printf("AGet: AllocSignal failed\n");
+            err = 20;
+            goto dl_cleanup;
+        }
+        SetHttpTransactionAttrs(
+            txn,
+            HTTA_NOTIFY_TASK,    (ULONG)FindTask(NULL),
+            HTTA_NOTIFY_SIGNAL,  notify_sig,
+            TAG_DONE);
     }
 
     if (args->HEADER != NULL) {
@@ -974,6 +990,10 @@ ag_download(struct AGetArgs *args)
     }
 
 dl_cleanup:
+    if (notify_sig != (ULONG)-1) {
+        FreeSignal(notify_sig);
+        notify_sig = (ULONG)-1;
+    }
     if (txn != NULL) {
         DisposeHttpTransaction(txn);
     }

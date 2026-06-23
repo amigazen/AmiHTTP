@@ -10,6 +10,7 @@
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <exec/lists.h>
+#include <exec/tasks.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -23,8 +24,11 @@
 #include "amihttp_funcs.h"
 #include "private/ht_debug.h"
 #include "private/ht_internal.h"
+#include "private/ht_hooks.h"
 
 extern struct AmiHttpBase *HttpBase;
+
+static VOID ht_txn_abort_for_dispose(struct HttpTransaction *txn);
 
 static VOID
 ht_txn_clear_req_headers(struct HttpTransaction *txn)
@@ -328,6 +332,10 @@ __ASM__ __SAVE_DS__ DisposeHttpTransaction(
     if (!ht_check_handle(txn->ht_Magic, HT_MAGIC_TXN)) {
         return;
     }
+    if (txn->ht_AsyncRunning) {
+        ht_txn_abort_for_dispose(txn);
+        ht_async_wait(txn, 30);
+    }
     if (txn->ht_Conn != NULL) {
         ht_pool_release(HttpBase, txn->ht_Conn, FALSE);
         txn->ht_Conn = NULL;
@@ -431,6 +439,12 @@ __ASM__ __SAVE_DS__ SetHttpTransactionAttrsA(
         case HTTA_RETRY_AUTH:
             txn->ht_RetryAuth = (BOOL)t->ti_Data;
             break;
+        case HTTA_NOTIFY_TASK:
+            txn->ht_NotifyTask = (struct Task *)t->ti_Data;
+            break;
+        case HTTA_NOTIFY_SIGNAL:
+            txn->ht_NotifySignal = (ULONG)t->ti_Data;
+            break;
         default:
             break;
         }
@@ -489,8 +503,7 @@ __ASM__ __SAVE_DS__ HttpTransactionClearHeaders(
 }
 
 LONG
-__ASM__ __SAVE_DS__ HttpTransactionPerform(
-    __REG__(a0, struct HttpTransaction *txn))
+ht_txn_perform_sync(struct HttpTransaction *txn)
 {
     ULONG redirects;
     LONG rc;
@@ -502,12 +515,23 @@ __ASM__ __SAVE_DS__ HttpTransactionPerform(
     if (HttpBase == NULL) {
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
     }
-    htDbgPut("HttpTransactionPerform");
+    if (ht_check_txn_abort(txn)) {
+        ht_set_txn_error(txn, ERROR_HTTP_ABORTED);
+        ht_hook_error(txn, ERROR_HTTP_ABORTED);
+        return ht_lvo_status(ERROR_HTTP_ABORTED);
+    }
+    htDbgPut("ht_txn_perform_sync");
     redirects = 0;
     for (;;) {
+        if (ht_check_txn_abort(txn)) {
+            ht_set_txn_error(txn, ERROR_HTTP_ABORTED);
+            ht_hook_error(txn, ERROR_HTTP_ABORTED);
+            return ht_lvo_status(ERROR_HTTP_ABORTED);
+        }
         rc = ht_txn_perform_once(txn);
         if (rc != 0) {
             ht_set_txn_error(txn, rc);
+            ht_hook_error(txn, rc);
             return ht_lvo_status(rc);
         }
         if (txn->ht_StatusCode == 401 && txn->ht_Session != NULL &&
@@ -520,6 +544,7 @@ __ASM__ __SAVE_DS__ HttpTransactionPerform(
                 txn->ht_Session->hs_Credentials);
             if (txn->ht_BasicAuth == NULL) {
                 ht_set_txn_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
+                ht_hook_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
                 return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
             }
             txn->ht_AuthTried = TRUE;
@@ -536,6 +561,7 @@ __ASM__ __SAVE_DS__ HttpTransactionPerform(
                 txn->ht_Session->hs_ProxyAuth);
             if (txn->ht_BasicProxyAuth == NULL) {
                 ht_set_txn_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
+                ht_hook_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
                 return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
             }
             txn->ht_ProxyAuthTried = TRUE;
@@ -554,11 +580,13 @@ __ASM__ __SAVE_DS__ HttpTransactionPerform(
         redirects++;
         if (redirects > txn->ht_Session->hs_MaxRedirects) {
             ht_set_txn_error(txn, ERROR_HTTP_TOO_MANY_REDIRECTS);
+            ht_hook_error(txn, ERROR_HTTP_TOO_MANY_REDIRECTS);
             return ht_lvo_status(ERROR_HTTP_TOO_MANY_REDIRECTS);
         }
         newurl = ht_join_uri(txn->ht_Url, txn->ht_RedirectUrl);
         if (newurl == NULL) {
             ht_set_txn_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
+            ht_hook_error(txn, ERROR_HTTP_OUT_OF_MEMORY);
             return ht_lvo_status(ERROR_HTTP_OUT_OF_MEMORY);
         }
         if (txn->ht_Url) {
@@ -572,18 +600,43 @@ __ASM__ __SAVE_DS__ HttpTransactionPerform(
         ht_txn_clear_resp_state(txn);
     }
     ht_set_txn_error(txn, 0);
+    if (!txn->ht_Async) {
+        ht_hook_complete(txn);
+    }
     return 1;
+}
+
+LONG
+__ASM__ __SAVE_DS__ HttpTransactionPerform(
+    __REG__(a0, struct HttpTransaction *txn))
+{
+    LONG rc;
+
+    rc = ht_txn_perform_sync(txn);
+    return rc;
 }
 
 LONG
 __ASM__ __SAVE_DS__ HttpTransactionPerformAsync(
     __REG__(a0, struct HttpTransaction *txn))
 {
+    LONG rc;
+
     if (!ht_check_handle(txn ? txn->ht_Magic : 0, HT_MAGIC_TXN)) {
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
     }
+    if (txn->ht_NotifyTask == NULL || txn->ht_NotifySignal == 0) {
+        return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
+    }
     txn->ht_Async = TRUE;
-    return HttpTransactionPerform(txn);
+    txn->ht_Complete = FALSE;
+    txn->ht_Flags &= ~HTF_COMPLETE;
+    rc = ht_async_start(txn);
+    if (rc != 0) {
+        ht_set_txn_error(txn, rc);
+        return ht_lvo_status(rc);
+    }
+    return 1;
 }
 
 BOOL
@@ -591,6 +644,9 @@ __ASM__ __SAVE_DS__ HttpTransactionIsComplete(
     __REG__(a0, struct HttpTransaction *txn))
 {
     if (txn == NULL || !ht_check_handle(txn->ht_Magic, HT_MAGIC_TXN)) {
+        return FALSE;
+    }
+    if (txn->ht_AsyncRunning) {
         return FALSE;
     }
     return txn->ht_Complete;
@@ -605,9 +661,15 @@ __ASM__ __SAVE_DS__ WaitHttpTransaction(
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
     }
     if (txn->ht_Complete) {
-        return 1;
+        return txn->ht_AsyncResult ? 1 : ht_lvo_status(txn->ht_LastError);
     }
-    return HttpTransactionPerform(txn);
+    if (txn->ht_AsyncRunning) {
+        ht_async_wait(txn, timeout_secs);
+    }
+    if (txn->ht_Complete) {
+        return txn->ht_AsyncResult ? 1 : ht_lvo_status(txn->ht_LastError);
+    }
+    return 0;
 }
 
 VOID
@@ -617,7 +679,17 @@ __ASM__ __SAVE_DS__ AbortHttpTransaction(
     if (txn == NULL || !ht_check_handle(txn->ht_Magic, HT_MAGIC_TXN)) {
         return;
     }
+    ht_txn_abort_for_dispose(txn);
+}
+
+static VOID
+ht_txn_abort_for_dispose(struct HttpTransaction *txn)
+{
+    if (txn == NULL) {
+        return;
+    }
     txn->ht_Flags |= HTF_ABORTED;
+    ht_async_cancel(txn);
     if (txn->ht_Conn != NULL) {
         ht_pool_release(HttpBase, txn->ht_Conn, FALSE);
         txn->ht_Conn = NULL;

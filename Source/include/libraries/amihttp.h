@@ -39,10 +39,13 @@ struct HttpCookieJar;
 struct ParsedUrl;
 
 /****************************************************************************/
-/* Errors from HttpError() / SetHttpError() (amihttp.library range)          */
-/* LVO routines return FALSE/0 on failure; call HttpError() for detail.      */
-/* HttpFault(code, header, buffer, len) formats a message (dos Fault style). */
-/* HttpTransactionReadBody: >0 bytes, 0 at EOF (HttpError()==0) or failure. */
+/* Error model (intentionally separate fields)                                */
+/*   HttpTransactionGetLastError() / HttpError() - transport/protocol codes   */
+/*     (ERROR_HTTP_*). Set when Perform/ReadBody fails.                       */
+/*   HttpTransactionGetStatusCode() - HTTP wire status (200, 404, 304…).      */
+/*     A 404 response may still be a successful Perform; check status code.   */
+/* LVO BOOL routines: TRUE/1 success, FALSE/0 failure then HttpError().       */
+/* HttpTransactionReadBody: >0 bytes copied, 0 at EOF or failure.             */
 /****************************************************************************/
 
 #define ERROR_HTTP_NOT_IMPLEMENTED      8700
@@ -68,6 +71,8 @@ struct ParsedUrl;
 /****************************************************************************/
 
 #define HTBT_BREAKMASK              (TAG_USER + 0x01)
+/* Exec signal mask (e.g. SIGBREAKF_CTRL_C) polled during blocking Perform and */
+/* ReadBody. Distinct from HTTA_NOTIFY_SIGNAL used for async completion.      */
 #define HTBT_ERRNOPTR               (TAG_USER + 0x02)
 #define HTBT_DEFAULT_USERAGENT      (TAG_USER + 0x03)
 #define HTBT_DEFAULT_PROXY          (TAG_USER + 0x04)
@@ -126,6 +131,24 @@ struct ParsedUrl;
 #define HTTA_REFERER                (TAG_USER + 0x210)
 #define HTTA_RETRY_AUTH             (TAG_USER + 0x211)
 #define HTTA_USERAGENT              (TAG_USER + 0x212)
+/* Async: Exec task + signal bit (0-31) signalled when PerformAsync completes. */
+#define HTTA_NOTIFY_TASK            (TAG_USER + 0x213)
+#define HTTA_NOTIFY_SIGNAL          (TAG_USER + 0x214)
+
+/****************************************************************************/
+/* Tier 2 body streaming (HttpTransactionReadBody)                            */
+/*   HttpTransactionPerform leaves the entity body on the wire; the caller     */
+/*   loops ReadBody until it returns 0. Caller supplies the buffer each call;  */
+/*   the library never requires the full entity in RAM. Chunked/gzip decode    */
+/*   is applied inside ReadBody when negotiated.                               */
+/* STRPTR lifetime: HttpTransactionGetStatusLine(), HttpTransactionRespHeader */
+/*   (), HttpTransactionGetRedirectLocation(), and nodes from                  */
+/*   HttpTransactionRespHeaders() point at library-owned storage valid until     */
+/*   DisposeHttpTransaction(). Do not FreeVec() these pointers.               */
+/* Async: HttpTransactionPerformAsync requires HTTA_NOTIFY_TASK and            */
+/*   HTTA_NOTIFY_SIGNAL; work runs on an internal worker task. WaitHttpTransaction */
+/*   waits on the notify signal (or polls if unset).                           */
+/****************************************************************************/
 
 /****************************************************************************/
 /* HttpConnectionSendRequest tags (Tier 3)                                    */
@@ -149,6 +172,43 @@ struct ParsedUrl;
 #define HTHK_COMPLETE               6
 #define HTHK_ERROR                  7
 #define HTHK_LOG                    8
+
+/****************************************************************************/
+/* Hook message packets (passed as CallHookPkt message / h_Data).             */
+/****************************************************************************/
+
+struct HttpHookHeadersDone
+{
+    struct HttpTransaction *hhd_Transaction;
+    LONG                    hhd_StatusCode;
+};
+
+struct HttpHookBodyChunk
+{
+    struct HttpTransaction *hbc_Transaction;
+    APTR                    hbc_Data;
+    ULONG                   hbc_Length;
+};
+
+struct HttpHookComplete
+{
+    struct HttpTransaction *hcp_Transaction;
+    LONG                    hcp_StatusCode;
+    LONG                    hcp_LastError;
+};
+
+struct HttpHookError
+{
+    struct HttpTransaction *her_Transaction;
+    LONG                    her_Code;
+};
+
+/****************************************************************************/
+/* Tier 3 response headers (HttpConnectionReadResponseHeaders)                */
+/*   Parsed headers live in a struct List of HttpHeader nodes (same layout as */
+/*   Tier 2). HttpConnectionRespHeader() / HttpConnectionRespHeaders() return */
+/*   library-owned STRPTR / List* valid until CloseHttpConnection().          */
+/****************************************************************************/
 
 /****************************************************************************/
 /* Referer policy values (HTSA_REFERER_POLICY)                              */

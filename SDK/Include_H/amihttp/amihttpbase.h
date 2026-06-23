@@ -38,6 +38,8 @@ struct AmiHttpBase
     ULONG                   ahb_AmiSSLInitCount;
     struct Library         *ahb_DOSBase;
     struct Library         *ahb_UtilityBase;
+    struct Library         *ahb_ZBase;          /* z.library (inflate) */
+    BOOL                    ahb_ZDecodeReady;   /* TRUE only when decode is wired */
 
     /* Global connection pool */
     struct List             ahb_PoolList;

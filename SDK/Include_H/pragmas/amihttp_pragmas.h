@@ -3,6 +3,8 @@
  * Copyright 2026 amigazen project
  *
  * amihttp_pragmas.h - SAS/C pragmas for amihttp.library
+ *
+ * Register masks follow NDK conventions (e.g. 09803 = a0,a1,d0 like GetGBuffers).
  */
 
 #ifndef PRAGMAS_AMIHTTP_H
@@ -53,31 +55,35 @@
 #pragma libcall HttpBase HttpConnectionWriteBodyChunk   102 09803
 #pragma libcall HttpBase HttpConnectionIsAlive          108 801
 #pragma libcall HttpBase ResetHttpConnection            10e 801
-#pragma libcall HttpBase ParseHttpUrl                   114 801
-#pragma libcall HttpBase DisposeHttpUrl                 11a 801
-#pragma libcall HttpBase BuildHttpUrl                   120 801
-#pragma libcall HttpBase HttpUrlEncode                  126 801
-#pragma libcall HttpBase HttpUrlDecode                  12c 801
-#pragma libcall HttpBase HttpPathEncode                 132 801
-#pragma libcall HttpBase HttpBuildQueryString           138 801
-#pragma libcall HttpBase NewHttpCookieJar               13e 00
-#pragma libcall HttpBase DisposeHttpCookieJar           144 801
-#pragma libcall HttpBase LoadHttpCookieJar              14a 9802
-#pragma libcall HttpBase SaveHttpCookieJar              150 9802
-#pragma libcall HttpBase FlushHttpCookieJar             156 8002
-#pragma libcall HttpBase SetHttpCookie                  15c 9802
-#pragma libcall HttpBase GetHttpCookieString            162 9802
-#pragma libcall HttpBase SetHttpError                   168 001
-#pragma libcall HttpBase HttpFault                      16e 198004
-#pragma libcall HttpBase HttpUriSchemePart              174 801
-#pragma libcall HttpBase HttpUriHostPart                17a 801
-#pragma libcall HttpBase HttpUriPathPart                180 801
-#pragma libcall HttpBase HttpUriFilePart                186 801
-#pragma libcall HttpBase HttpUriQueryPart               18c 801
-#pragma libcall HttpBase HttpUriParentPart              192 801
-#pragma libcall HttpBase HttpUriAuthorityPart           198 801
-#pragma libcall HttpBase HttpJoinUri                    19e 9802
-#pragma libcall HttpBase HttpTransactionGetPeerCert     1a4 9802
-#pragma libcall HttpBase HttpPeerCertFree               1aa 801
+#pragma libcall HttpBase HttpConnectionRespHeader       114 9802
+#pragma libcall HttpBase HttpConnectionRespHeaders      11a 801
+#pragma libcall HttpBase HttpConnectionGetStatusCode    120 801
+#pragma libcall HttpBase HttpConnectionGetStatusLine    126 801
+#pragma libcall HttpBase ParseHttpUrl                   12c 801
+#pragma libcall HttpBase DisposeHttpUrl                 132 801
+#pragma libcall HttpBase BuildHttpUrl                   138 801
+#pragma libcall HttpBase HttpUrlEncode                  13e 801
+#pragma libcall HttpBase HttpUrlDecode                  144 801
+#pragma libcall HttpBase HttpPathEncode                 14a 801
+#pragma libcall HttpBase HttpBuildQueryString           150 801
+#pragma libcall HttpBase NewHttpCookieJar               156 00
+#pragma libcall HttpBase DisposeHttpCookieJar           15c 801
+#pragma libcall HttpBase LoadHttpCookieJar              162 9802
+#pragma libcall HttpBase SaveHttpCookieJar              168 9802
+#pragma libcall HttpBase FlushHttpCookieJar             16e 8002
+#pragma libcall HttpBase SetHttpCookie                  174 9802
+#pragma libcall HttpBase GetHttpCookieString            17a 9802
+#pragma libcall HttpBase SetHttpError                   180 001
+#pragma libcall HttpBase HttpFault                      186 198004
+#pragma libcall HttpBase HttpUriSchemePart              18c 801
+#pragma libcall HttpBase HttpUriHostPart                192 801
+#pragma libcall HttpBase HttpUriPathPart                198 801
+#pragma libcall HttpBase HttpUriFilePart                19e 801
+#pragma libcall HttpBase HttpUriQueryPart               1a4 801
+#pragma libcall HttpBase HttpUriParentPart              1aa 801
+#pragma libcall HttpBase HttpUriAuthorityPart           1b0 801
+#pragma libcall HttpBase HttpJoinUri                    1b6 9802
+#pragma libcall HttpBase HttpTransactionGetPeerCert     1bc 9802
+#pragma libcall HttpBase HttpPeerCertFree               1c2 801
 
 #endif /* PRAGMAS_AMIHTTP_H */

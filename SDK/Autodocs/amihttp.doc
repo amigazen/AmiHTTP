@@ -1,0 +1,2047 @@
+TABLE OF CONTENTS
+
+amihttp.library/background
+amihttp.library/errors
+amihttp.library/hooks
+amihttp.library/tags
+amihttp.library/AbortHttpTransaction
+amihttp.library/BuildHttpUrl
+amihttp.library/CloseHttpConnection
+amihttp.library/DisposeHttpCookieJar
+amihttp.library/DisposeHttpSession
+amihttp.library/DisposeHttpTransaction
+amihttp.library/DisposeHttpUrl
+amihttp.library/FlushHttpCookieJar
+amihttp.library/GetHttpCookieString
+amihttp.library/HttpBaseTagList
+amihttp.library/HttpBaseTags
+amihttp.library/HttpConnectionGetStatusCode
+amihttp.library/HttpConnectionGetStatusLine
+amihttp.library/HttpConnectionIsAlive
+amihttp.library/HttpConnectionRead
+amihttp.library/HttpConnectionReadBodyChunk
+amihttp.library/HttpConnectionReadResponseHeaders
+amihttp.library/HttpConnectionReadResponseLine
+amihttp.library/HttpConnectionRespHeader
+amihttp.library/HttpConnectionRespHeaders
+amihttp.library/HttpConnectionSendRequest
+amihttp.library/HttpConnectionWrite
+amihttp.library/HttpConnectionWriteBodyChunk
+amihttp.library/HttpError
+amihttp.library/HttpFault
+amihttp.library/HttpGetErrorString
+amihttp.library/HttpJoinUri
+amihttp.library/HttpPathEncode
+amihttp.library/HttpPeerCertFree
+amihttp.library/HttpSessionAttachCookieJar
+amihttp.library/HttpSessionDetachCookieJar
+amihttp.library/HttpTransactionAddHeader
+amihttp.library/HttpTransactionClearHeaders
+amihttp.library/HttpTransactionGetBytesReceived
+amihttp.library/HttpTransactionGetContentLength
+amihttp.library/HttpTransactionGetLastError
+amihttp.library/HttpTransactionGetPeerCert
+amihttp.library/HttpTransactionGetRedirectLocation
+amihttp.library/HttpTransactionGetStatusCode
+amihttp.library/HttpTransactionGetStatusLine
+amihttp.library/HttpTransactionGetTiming
+amihttp.library/HttpTransactionIsComplete
+amihttp.library/HttpTransactionPerform
+amihttp.library/HttpTransactionPerformAsync
+amihttp.library/HttpTransactionReadBody
+amihttp.library/HttpTransactionRespHeader
+amihttp.library/HttpTransactionRespHeaders
+amihttp.library/HttpUriAuthorityPart
+amihttp.library/HttpUriFilePart
+amihttp.library/HttpUriHostPart
+amihttp.library/HttpUriParentPart
+amihttp.library/HttpUriPathPart
+amihttp.library/HttpUriQueryPart
+amihttp.library/HttpUriSchemePart
+amihttp.library/HttpUrlDecode
+amihttp.library/HttpUrlEncode
+amihttp.library/HttpBuildQueryString
+amihttp.library/LoadHttpCookieJar
+amihttp.library/NewHttpCookieJar
+amihttp.library/NewHttpSession
+amihttp.library/NewHttpTransaction
+amihttp.library/OpenHttpConnection
+amihttp.library/ParseHttpUrl
+amihttp.library/ResetHttpConnection
+amihttp.library/SaveHttpCookieJar
+amihttp.library/SetHttpCookie
+amihttp.library/SetHttpError
+amihttp.library/SetHttpSessionAttrs
+amihttp.library/SetHttpSessionAttrsA
+amihttp.library/SetHttpSessionHook
+amihttp.library/SetHttpTransactionAttrs
+amihttp.library/SetHttpTransactionAttrsA
+amihttp.library/SetHttpTransactionHook
+amihttp.library/WaitHttpTransaction
+amihttp.library/background                       amihttp.library/background
+
+   PURPOSE
+
+   amihttp.library is an AmigaOS HTTP/HTTPS client shared library for
+   Amiga.  It wraps bsdsocket.library and amissl.library internally.  
+   Applications hold only opaque handles; sockets, SSL contexts, connection 
+   pools, and wire buffers are never exposed.
+
+   BOOTSTRAP
+
+   OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket.library
+   opens on first HTTP use; amisslmaster.library and OpenAmiSSLTags() run on
+   first HTTPS use.  utility.library v47+ and dos.library v37+ are required
+   at library open time.
+
+   API TIERS
+
+   Tier 0 — HttpBaseTagList / HttpError
+     Per-process defaults (timeouts, pool limits, break mask).
+
+   Tier 1 — HttpSession, HttpCookieJar
+     Persistent client settings shared by many requests (User-Agent, proxy,
+     redirect policy, optional cookie jar).
+
+   Tier 2 — HttpTransaction  (primary API)
+     Complete request/response cycle: wget, browser page load, REST, AJAX.
+     HttpTransactionPerform sends the request and parses response headers.
+     HttpTransactionReadBody streams the entity body in caller-supplied
+     buffers.
+
+   Tier 3 — HttpConnection
+     Low-level streaming connection for WebDAV, custom protocols, or
+     incremental wire I/O.  Simple GET/PUT should use Tier 2.
+
+   TYPICAL TIER 2 FLOW
+
+   HttpBase = OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION);
+   session = NewHttpSession();
+   SetHttpSessionAttrs(session, HTSA_USERAGENT, (ULONG)"MyApp/1.0", TAG_DONE);
+   txn = NewHttpTransaction(session);
+   SetHttpTransactionAttrs(txn, HTTA_URL, (ULONG)url, HTTA_METHOD, (ULONG)"GET",
+       TAG_DONE);
+   HttpTransactionPerform(txn);
+   status = HttpTransactionGetStatusCode(txn);
+   while ((n = HttpTransactionReadBody(txn, buf, sizeof(buf))) > 0) {
+       /* process buf[0..n-1] */
+   }
+   DisposeHttpTransaction(txn);
+   DisposeHttpSession(session);
+   CloseLibrary(HttpBase);
+
+   ASYNC TIER 2 FLOW
+
+   signal = AllocSignal(-1);
+   SetHttpTransactionAttrs(txn,
+       HTTA_NOTIFY_TASK,   (ULONG)FindTask(NULL),
+       HTTA_NOTIFY_SIGNAL, signal,
+       TAG_DONE);
+   HttpTransactionPerformAsync(txn);
+   while (!HttpTransactionIsComplete(txn))
+       WaitHttpTransaction(txn, 1);
+   FreeSignal(signal);
+   /* then ReadBody loop as above */
+
+   OWNERSHIP AND LIFETIME
+
+   - DisposeHttpSession only after all child HttpTransaction and
+     HttpConnection handles are disposed.
+   - STRPTR values from HttpTransactionGetStatusLine(),
+     HttpTransactionRespHeader(), HttpTransactionGetRedirectLocation(), and
+     HttpTransactionRespHeaders() are library-owned until
+     DisposeHttpTransaction().  Do not free them.
+   - Tier 3 header accessors are valid until CloseHttpConnection().
+
+   ERROR MODEL
+
+   HttpTransactionGetLastError() and HttpError() report transport and
+   protocol failures (ERROR_HTTP_*).  HttpTransactionGetStatusCode() reports
+   the HTTP wire status (200, 404, 304, etc.).  A successful Perform with
+   HTTP 404 is not a library error — check the status code separately.
+   See amihttp.library/errors.
+
+   REQUIREMENTS
+
+   - AmigaOS 3.2 or 4.1.
+   - bsdsocket.library (opened internally).
+   - amisslmaster.library / AmiSSL for HTTPS (opened internally).
+   - utility.library v47+, dos.library v37+.
+
+   INCLUDE FILES
+
+   #include <libraries/amihttp.h>
+   #include <proto/amihttp.h>
+
+   SEE ALSO
+       amihttp.library/tags, amihttp.library/hooks, amihttp.library/errors,
+       OWNERSHIP.md, Examples/AGet.c, Examples/async_demo.c
+
+amihttp.library/errors                           amihttp.library/errors
+
+   GENERAL INFORMATION
+
+   amihttp.library defines ERROR_HTTP_* codes in the 8700 range.  After any
+   LVO returning FALSE/0, call HttpError() for the current error code.
+   HttpGetErrorString(code) returns a static English description.
+   HttpFault(code, header, buffer, len) formats a dos.library Fault()-style
+   message into a caller buffer.
+
+   CODES
+
+   ERROR_HTTP_NOT_IMPLEMENTED (8700)
+       Feature or LVO not yet implemented.
+
+   ERROR_HTTP_DNS_FAILED (8701)
+       Host name resolution failed.
+
+   ERROR_HTTP_CONNECT_FAILED (8702)
+       TCP connection failed.
+
+   ERROR_HTTP_CONNECT_TIMEOUT (8703)
+       Connect timed out.
+
+   ERROR_HTTP_SSL_HANDSHAKE (8704)
+       TLS handshake failed.
+
+   ERROR_HTTP_SSL_VERIFY (8705)
+       Certificate verification failed.
+
+   ERROR_HTTP_READ_TIMEOUT (8706)
+       Read timed out waiting for data.
+
+   ERROR_HTTP_WRITE_FAILED (8707)
+       Send failed on socket or SSL layer.
+
+   ERROR_HTTP_READ_FAILED (8708)
+       Read failed or unexpected EOF.
+
+   ERROR_HTTP_ABORTED (8709)
+       AbortHttpTransaction, break mask, or user cancel.
+
+   ERROR_HTTP_PROTOCOL (8710)
+       Malformed HTTP response.
+
+   ERROR_HTTP_OUT_OF_MEMORY (8711)
+       Memory allocation failed.
+
+   ERROR_HTTP_INVALID_URL (8712)
+       URL parse or composition error.
+
+   ERROR_HTTP_INVALID_HANDLE (8713)
+       Bad or disposed handle.
+
+   ERROR_HTTP_PROXY_AUTH (8714)
+       Proxy authentication required or failed.
+
+   ERROR_HTTP_TOO_MANY_REDIRECTS (8715)
+       Redirect limit exceeded.
+
+   ERROR_HTTP_DECODE (8716)
+       gzip/chunked decode error.
+
+   SEE ALSO
+       HttpError(), HttpGetErrorString(), HttpFault(), SetHttpError(),
+       HTBT_ERRNOPTR
+
+amihttp.library/hooks                             amihttp.library/hooks
+
+   GENERAL INFORMATION
+
+   Hooks are installed with SetHttpSessionHook() or SetHttpTransactionHook().
+   Transaction hooks override session hooks for the same type.  The library
+   dispatches hooks with utility.library CallHookPkt(hook, object, message).
+
+   HOOK TYPES
+
+   HTHK_PROGRESS (1)          — not yet invoked (reserved).
+   HTHK_CERT_VERIFY (2)       — not yet invoked (reserved).
+   HTHK_REDIRECT (3)          — not yet invoked (reserved).
+   HTHK_HEADERS_DONE (4)      — after response headers parsed.
+   HTHK_BODY_CHUNK (5)        — after each HttpTransactionReadBody copy.
+   HTHK_COMPLETE (6)          — after successful Perform (sync or async).
+   HTHK_ERROR (7)             — on Perform failure.
+   HTHK_LOG (8)               — not yet invoked (reserved).
+
+   MESSAGE STRUCTURES
+
+   HTHK_HEADERS_DONE — struct HttpHookHeadersDone
+       hhd_Transaction, hhd_StatusCode
+
+   HTHK_BODY_CHUNK — struct HttpHookBodyChunk
+       hbc_Transaction, hbc_Data, hbc_Length
+       hbc_Data points at the caller buffer passed to ReadBody for that call.
+
+   HTHK_COMPLETE — struct HttpHookComplete
+       hcp_Transaction, hcp_StatusCode, hcp_LastError
+
+   HTHK_ERROR — struct HttpHookError
+       her_Transaction, her_Code
+
+   SEE ALSO
+       SetHttpSessionHook(), SetHttpTransactionHook(),
+       <libraries/amihttp.h>
+
+amihttp.library/tags                               amihttp.library/tags
+
+   GENERAL INFORMATION
+
+   TagItem-based configuration uses SetHttpSessionAttrsA(),
+   SetHttpTransactionAttrsA(), and HttpBaseTagList().  Variadic wrappers
+   HttpBaseTags(), SetHttpSessionAttrs(), and SetHttpTransactionAttrs() are
+   provided in <proto/amihttp.h>.
+
+   HTBT_* — HttpBaseTagList (Tier 0)
+
+   HTBT_BREAKMASK
+       Exec signal mask (e.g. SIGBREAKF_CTRL_C) polled during blocking
+       HttpTransactionPerform and HttpTransactionReadBody.  Distinct from
+       HTTA_NOTIFY_SIGNAL used for async completion.
+
+   HTBT_ERRNOPTR
+       Pointer to ULONG receiving a copy of HttpError() on failure.
+
+   HTBT_DEFAULT_USERAGENT, HTBT_DEFAULT_PROXY, HTBT_DEFAULT_TIMEOUT
+   HTBT_MAX_IDLE_CONNECTIONS, HTBT_IDLE_TIMEOUT, HTBT_SSL_VERIFY
+       Process-wide defaults.  HTBT_SSL_VERIFY uses HTSSL_VERIFY_* values.
+
+   HTBT_LOG_HOOK, HTBT_HTTP2_ENABLED — reserved for v2.
+
+   HTSA_* — SetHttpSessionAttrsA (Tier 1)
+
+   HTSA_USERAGENT, HTSA_PROXY, HTSA_PROXY_AUTH, HTSA_CREDENTIALS
+   HTSA_MAX_REDIRECTS, HTSA_FOLLOW_REDIRECTS, HTSA_ACCEPT_ENCODING
+   HTSA_KEEPALIVE, HTSA_MAX_CONNECTIONS
+   HTSA_CONNECT_TIMEOUT, HTSA_READ_TIMEOUT, HTSA_TOTAL_TIMEOUT
+   HTSA_SSL_CIPHER_LIST, HTSA_SSL_VERIFY, HTSA_SSL_CERT_HOOK
+   HTSA_COOKIE_JAR, HTSA_TASK_SERIAL
+       Task serial partitions the connection pool (stable ULONG, not task
+       pointer).  HTSA_REFERER_POLICY: HTRP_NEVER, HTRP_ORIGIN, HTRP_ALWAYS.
+
+   HTSA_PROXY_PAC_URL, HTSA_ALPN — reserved for v2.
+
+   HTTA_* — SetHttpTransactionAttrsA (Tier 2)
+
+   HTTA_URL, HTTA_BASE_URL, HTTA_METHOD
+   HTTA_POST_BODY, HTTA_POST_LENGTH, HTTA_POST_STREAM_HOOK
+   HTTA_RANGE_START, HTTA_RANGE_END
+   HTTA_IF_MODIFIED_SINCE, HTTA_IF_NONE_MATCH
+   HTTA_NO_CACHE, HTTA_NO_BODY, HTTA_FORM_MULTIPART
+   HTTA_SOURCE_ADDRESS, HTTA_THROTTLE_BPS, HTTA_CHECKSUM
+   HTTA_REFERER, HTTA_RETRY_AUTH, HTTA_USERAGENT
+   HTTA_NOTIFY_TASK, HTTA_NOTIFY_SIGNAL
+       Required for HttpTransactionPerformAsync.  Worker task signals
+       notify task on completion.
+
+   HTTR_* — HttpConnectionSendRequest (Tier 3, when implemented)
+
+   HTTR_HOST, HTTR_HEADERS, HTTR_CONTENT_LENGTH, HTTR_CHUNKED, HTTR_USERAGENT
+
+   SEE ALSO
+       HttpBaseTagList(), SetHttpSessionAttrsA(), SetHttpTransactionAttrsA(),
+       amihttp.library/background
+
+amihttp.library/HttpBaseTagList                 amihttp.library/HttpBaseTagList
+
+   NAME
+       HttpBaseTagList -- Set per-process library defaults.  (V1)
+
+   SYNOPSIS
+       success = HttpBaseTagList(tags);
+       D0                      A0
+
+       LONG HttpBaseTagList(struct TagItem *tags);
+
+       success = HttpBaseTags(Tag1, ...);
+
+       LONG HttpBaseTags(ULONG, ...);
+
+   FUNCTION
+       Configures process-wide defaults after OpenLibrary().  Tags are
+       HTBT_* values; see amihttp.library/tags.
+
+   INPUTS
+       tags - TagItem array terminated with TAG_DONE, or variadic TAG_DONE
+           list for HttpBaseTags().
+
+   RESULT
+       success - TRUE (1) on success, FALSE (0) on failure.  Call HttpError()
+           when FALSE.
+
+   SEE ALSO
+       HttpError(), amihttp.library/tags, HttpBaseTags()
+
+amihttp.library/HttpBaseTags                       amihttp.library/HttpBaseTags
+
+   NAME
+       HttpBaseTags -- Variadic wrapper for HttpBaseTagList.  (V1)
+
+   SYNOPSIS
+       success = HttpBaseTags(Tag1, ...);
+
+       LONG HttpBaseTags(ULONG, ...);
+
+   FUNCTION
+       Convenience wrapper around HttpBaseTagList().  Defined as a static
+       inline in <proto/amihttp.h>.
+
+   SEE ALSO
+       HttpBaseTagList(), amihttp.library/tags
+
+amihttp.library/HttpError                           amihttp.library/HttpError
+
+   NAME
+       HttpError -- Return current library error code.  (V1)
+
+   SYNOPSIS
+       code = HttpError();
+       D0
+
+       LONG HttpError(VOID);
+
+   FUNCTION
+       Returns the most recent ERROR_HTTP_* code for this process.  Cleared
+       to 0 on successful LVO calls.  Use HTBT_ERRNOPTR to mirror errors to
+       a caller-owned ULONG automatically.
+
+   RESULT
+       code - 0 if no error, otherwise ERROR_HTTP_* value.
+
+   SEE ALSO
+       SetHttpError(), HttpGetErrorString(), HttpFault(),
+       amihttp.library/errors
+
+amihttp.library/SetHttpError                     amihttp.library/SetHttpError
+
+   NAME
+       SetHttpError -- Set current library error code.  (V1)
+
+   SYNOPSIS
+       old = SetHttpError(code);
+       D0               D0
+
+       LONG SetHttpError(LONG code);
+
+   FUNCTION
+       Sets the library-wide error code (for example after application-level
+       validation).  Returns the previous code.
+
+   INPUTS
+       code - new ERROR_HTTP_* value, or 0 to clear.
+
+   RESULT
+       old - previous error code.
+
+   SEE ALSO
+       HttpError()
+
+amihttp.library/HttpGetErrorString         amihttp.library/HttpGetErrorString
+
+   NAME
+       HttpGetErrorString -- English text for an error code.  (V1)
+
+   SYNOPSIS
+       str = HttpGetErrorString(code);
+       D0                     D0
+
+       STRPTR HttpGetErrorString(LONG code);
+
+   FUNCTION
+       Returns a static string describing an ERROR_HTTP_* code.
+
+   INPUTS
+       code - ERROR_HTTP_* value.
+
+   RESULT
+       str - read-only description string.
+
+   SEE ALSO
+       HttpError(), HttpFault(), amihttp.library/errors
+
+amihttp.library/HttpFault                           amihttp.library/HttpFault
+
+   NAME
+       HttpFault -- Format error message into a buffer.  (V1)
+
+   SYNOPSIS
+       len = HttpFault(code, header, buffer, buflen);
+       D0            D0    A0      A1       D1
+
+       LONG HttpFault(LONG code, STRPTR header, STRPTR buffer, LONG buflen);
+
+   FUNCTION
+       Formats a human-readable error line similar to dos.library Fault().
+       Useful for printing to stderr or requester text.
+
+   INPUTS
+       code   - ERROR_HTTP_* value.
+       header - short context string (e.g. function name), may be NULL.
+       buffer - caller buffer for formatted text.
+       buflen - size of buffer in bytes.
+
+   RESULT
+       len - length of formatted string, or 0 on failure.
+
+   SEE ALSO
+       HttpError(), HttpGetErrorString()
+
+amihttp.library/NewHttpSession                 amihttp.library/NewHttpSession
+
+   NAME
+       NewHttpSession -- Allocate a client session context.  (V1)
+
+   SYNOPSIS
+       session = NewHttpSession();
+       D0
+
+       struct HttpSession *NewHttpSession(VOID);
+
+   FUNCTION
+       Creates a Tier 1 session with sensible defaults (User-Agent
+       "amihttp/1.0", follow redirects, keep-alive enabled).  Sessions hold
+       settings copied into each HttpTransaction created from them.
+
+   RESULT
+       session - opaque handle, or NULL on failure (HttpError()).
+
+   SEE ALSO
+       DisposeHttpSession(), SetHttpSessionAttrsA(), NewHttpTransaction()
+
+amihttp.library/DisposeHttpSession         amihttp.library/DisposeHttpSession
+
+   NAME
+       DisposeHttpSession -- Free a session.  (V1)
+
+   SYNOPSIS
+       DisposeHttpSession(session);
+                          A0
+
+       VOID DisposeHttpSession(struct HttpSession *session);
+
+   FUNCTION
+       Disposes session state.  All HttpTransaction and HttpConnection handles
+       created from this session must be disposed first.
+
+   INPUTS
+       session - from NewHttpSession(), or NULL (no action).
+
+   SEE ALSO
+       NewHttpSession()
+
+amihttp.library/SetHttpSessionAttrsA         amihttp.library/SetHttpSessionAttrsA
+
+   NAME
+       SetHttpSessionAttrsA -- Configure session defaults.  (V1)
+
+   SYNOPSIS
+       success = SetHttpSessionAttrsA(session, tags);
+       D0                             A0       A1
+
+       LONG SetHttpSessionAttrsA(struct HttpSession *, struct TagItem *);
+
+   FUNCTION
+       Applies HTSA_* tags.  See amihttp.library/tags.
+
+   INPUTS
+       session - valid HttpSession handle.
+       tags    - TagItem list, TAG_DONE terminated.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       SetHttpSessionAttrs(), amihttp.library/tags
+
+amihttp.library/SetHttpSessionAttrs           amihttp.library/SetHttpSessionAttrs
+
+   NAME
+       SetHttpSessionAttrs -- Variadic session configuration.  (V1)
+
+   SYNOPSIS
+       success = SetHttpSessionAttrs(session, Tag1, ...);
+
+       LONG SetHttpSessionAttrs(struct HttpSession *, ULONG, ...);
+
+   FUNCTION
+       Variadic wrapper for SetHttpSessionAttrsA().  Inline in <proto/amihttp.h>.
+
+   SEE ALSO
+       SetHttpSessionAttrsA()
+
+amihttp.library/SetHttpSessionHook             amihttp.library/SetHttpSessionHook
+
+   NAME
+       SetHttpSessionHook -- Install a session-wide hook.  (V1)
+
+   SYNOPSIS
+       success = SetHttpSessionHook(session, type, hook);
+       D0                           A0       D0    A1
+
+       LONG SetHttpSessionHook(struct HttpSession *, ULONG, struct Hook *);
+
+   FUNCTION
+       Stores a struct Hook pointer for hook type HTHK_*.  Used as fallback
+       when no transaction hook is set.  See amihttp.library/hooks.
+
+   INPUTS
+       session - HttpSession handle.
+       type    - HTHK_PROGRESS .. HTHK_LOG (1..8).
+       hook    - Hook structure, or NULL to clear.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       SetHttpTransactionHook(), amihttp.library/hooks
+
+amihttp.library/HttpSessionAttachCookieJar amihttp.library/HttpSessionAttachCookieJar
+
+   NAME
+       HttpSessionAttachCookieJar -- Attach cookie jar to session.  (V1)
+
+   SYNOPSIS
+       success = HttpSessionAttachCookieJar(session, jar);
+       D0                                   A0       A1
+
+       LONG HttpSessionAttachCookieJar(struct HttpSession *,
+           struct HttpCookieJar *);
+
+   FUNCTION
+       Associates a cookie jar with the session.  Outbound requests gain
+       Cookie: headers; Set-Cookie response headers update the jar.  The
+       session does not own the jar — caller must keep jar alive until
+       detach or session dispose.
+
+   INPUTS
+       session - HttpSession handle.
+       jar     - HttpCookieJar from NewHttpCookieJar(), or NULL to clear.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       HttpSessionDetachCookieJar(), NewHttpCookieJar()
+
+amihttp.library/HttpSessionDetachCookieJar amihttp.library/HttpSessionDetachCookieJar
+
+   NAME
+       HttpSessionDetachCookieJar -- Remove cookie jar from session.  (V1)
+
+   SYNOPSIS
+       HttpSessionDetachCookieJar(session);
+                                  A0
+
+       VOID HttpSessionDetachCookieJar(struct HttpSession *);
+
+   FUNCTION
+       Clears the session cookie jar pointer without disposing the jar.
+
+   INPUTS
+       session - HttpSession handle.
+
+   SEE ALSO
+       HttpSessionAttachCookieJar()
+
+amihttp.library/NewHttpTransaction         amihttp.library/NewHttpTransaction
+
+   NAME
+       NewHttpTransaction -- Create a request/response transaction.  (V1)
+
+   SYNOPSIS
+       txn = NewHttpTransaction(session);
+       D0                         A0
+
+       struct HttpTransaction *NewHttpTransaction(struct HttpSession *);
+
+   FUNCTION
+       Allocates a Tier 2 transaction borrowing session defaults.  Configure
+       with SetHttpTransactionAttrsA() before HttpTransactionPerform().
+
+   INPUTS
+       session - parent HttpSession handle.
+
+   RESULT
+       txn - opaque handle, or NULL on failure.
+
+   SEE ALSO
+       DisposeHttpTransaction(), SetHttpTransactionAttrsA(),
+       HttpTransactionPerform()
+
+amihttp.library/DisposeHttpTransaction     amihttp.library/DisposeHttpTransaction
+
+   NAME
+       DisposeHttpTransaction -- Free transaction state.  (V1)
+
+   SYNOPSIS
+       DisposeHttpTransaction(txn);
+                              A0
+
+       VOID DisposeHttpTransaction(struct HttpTransaction *txn);
+
+   FUNCTION
+       Releases transaction resources and returns any pooled connection.
+       Waits briefly if an async worker is still running.
+
+   INPUTS
+       txn - HttpTransaction handle, or NULL.
+
+   SEE ALSO
+       NewHttpTransaction(), AbortHttpTransaction()
+
+amihttp.library/SetHttpTransactionAttrsA amihttp.library/SetHttpTransactionAttrsA
+
+   NAME
+       SetHttpTransactionAttrsA -- Configure a transaction.  (V1)
+
+   SYNOPSIS
+       success = SetHttpTransactionAttrsA(txn, tags);
+       D0                               A0   A1
+
+       LONG SetHttpTransactionAttrsA(struct HttpTransaction *,
+           struct TagItem *);
+
+   FUNCTION
+       Applies HTTA_* tags.  See amihttp.library/tags.
+
+   INPUTS
+       txn  - HttpTransaction handle.
+       tags - TagItem list.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       SetHttpTransactionAttrs(), amihttp.library/tags
+
+amihttp.library/SetHttpTransactionAttrs   amihttp.library/SetHttpTransactionAttrs
+
+   NAME
+       SetHttpTransactionAttrs -- Variadic transaction configuration.  (V1)
+
+   SYNOPSIS
+       success = SetHttpTransactionAttrs(txn, Tag1, ...);
+
+       LONG SetHttpTransactionAttrs(struct HttpTransaction *, ULONG, ...);
+
+   FUNCTION
+       Variadic wrapper for SetHttpTransactionAttrsA().
+
+   SEE ALSO
+       SetHttpTransactionAttrsA()
+
+amihttp.library/HttpTransactionAddHeader amihttp.library/HttpTransactionAddHeader
+
+   NAME
+       HttpTransactionAddHeader -- Add a request header.  (V1)
+
+   SYNOPSIS
+       success = HttpTransactionAddHeader(txn, name, value);
+       D0                                 A0   A1    A2
+
+       LONG HttpTransactionAddHeader(struct HttpTransaction *, STRPTR, STRPTR);
+
+   FUNCTION
+       Appends an HTTP request header (name: value).  Multiple headers with
+       the same name are allowed.  Cleared by HttpTransactionClearHeaders().
+
+   INPUTS
+       txn   - HttpTransaction handle.
+       name  - header field name.
+       value - header field value (without leading colon).
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       HttpTransactionClearHeaders(), HttpTransactionPerform()
+
+amihttp.library/HttpTransactionClearHeaders
+                                      amihttp.library/HttpTransactionClearHeaders
+
+   NAME
+       HttpTransactionClearHeaders -- Remove all request headers.  (V1)
+
+   SYNOPSIS
+       HttpTransactionClearHeaders(txn);
+                                   A0
+
+       VOID HttpTransactionClearHeaders(struct HttpTransaction *txn);
+
+   FUNCTION
+       Removes headers added with HttpTransactionAddHeader().
+
+   INPUTS
+       txn - HttpTransaction handle.
+
+   SEE ALSO
+       HttpTransactionAddHeader()
+
+amihttp.library/HttpTransactionPerform     amihttp.library/HttpTransactionPerform
+
+   NAME
+       HttpTransactionPerform -- Send request and read response headers.  (V1)
+
+   SYNOPSIS
+       success = HttpTransactionPerform(txn);
+       D0                               A0
+
+       LONG HttpTransactionPerform(struct HttpTransaction *txn);
+
+   FUNCTION
+       Resolves URL, acquires pooled TCP/TLS connection, sends request,
+       follows redirects when HTSA_FOLLOW_REDIRECTS is enabled, parses
+       response headers, and leaves the entity body on the wire for
+       HttpTransactionReadBody().  Does not buffer the full body in RAM.
+
+       Honors HTBT_BREAKMASK during blocking I/O.
+
+   INPUTS
+       txn - configured HttpTransaction (HTTA_URL required).
+
+   RESULT
+       success - TRUE (1) if headers received, FALSE (0) on failure.
+           On success, query HttpTransactionGetStatusCode() and response
+           headers.  Then loop HttpTransactionReadBody() until 0.
+
+   NOTES
+       HTTP 4xx/5xx responses are not library errors unless the connection
+       failed.  Check HttpTransactionGetStatusCode().
+
+   SEE ALSO
+       HttpTransactionReadBody(), HttpTransactionPerformAsync(),
+       HttpTransactionGetStatusCode()
+
+amihttp.library/HttpTransactionPerformAsync
+                                      amihttp.library/HttpTransactionPerformAsync
+
+   NAME
+       HttpTransactionPerformAsync -- Perform on a worker task.  (V1)
+
+   SYNOPSIS
+       success = HttpTransactionPerformAsync(txn);
+       D0                                    A0
+
+       LONG HttpTransactionPerformAsync(struct HttpTransaction *txn);
+
+   FUNCTION
+       Starts HttpTransactionPerform() on an internal Exec task.  Requires
+       HTTA_NOTIFY_TASK and HTTA_NOTIFY_SIGNAL to be set on the transaction.
+       Signals the notify task when complete.  Use WaitHttpTransaction() or
+       Wait() on the notify signal, then HttpTransactionIsComplete().
+
+   INPUTS
+       txn - transaction with notify tags configured.
+
+   RESULT
+       success - TRUE (1) if worker started, FALSE (0) if notify tags
+           missing or worker could not be created.
+
+   SEE ALSO
+       WaitHttpTransaction(), HttpTransactionIsComplete(),
+       HTTA_NOTIFY_TASK, HTTA_NOTIFY_SIGNAL
+
+amihttp.library/HttpTransactionIsComplete
+                                      amihttp.library/HttpTransactionIsComplete
+
+   NAME
+       HttpTransactionIsComplete -- Query async perform completion.  (V1)
+
+   SYNOPSIS
+       complete = HttpTransactionIsComplete(txn);
+       D0                                 A0
+
+       BOOL HttpTransactionIsComplete(struct HttpTransaction *txn);
+
+   FUNCTION
+       Returns TRUE when Perform (sync or async) has finished.  Returns FALSE
+       while an async worker is still running.
+
+   INPUTS
+       txn - HttpTransaction handle.
+
+   RESULT
+       complete - TRUE or FALSE.
+
+   SEE ALSO
+       HttpTransactionPerformAsync(), WaitHttpTransaction()
+
+amihttp.library/WaitHttpTransaction           amihttp.library/WaitHttpTransaction
+
+   NAME
+       WaitHttpTransaction -- Wait for async perform.  (V1)
+
+   SYNOPSIS
+       success = WaitHttpTransaction(txn, timeout_secs);
+       D0                            A0   D0
+
+       LONG WaitHttpTransaction(struct HttpTransaction *, ULONG timeout_secs);
+
+   FUNCTION
+       Blocks until async perform completes or timeout expires.  Uses
+       Wait() on HTTA_NOTIFY_SIGNAL when configured; otherwise polls
+       completion with Delay().
+
+   INPUTS
+       txn          - HttpTransaction handle.
+       timeout_secs - maximum wait in seconds (0 = wait indefinitely on
+           notify signal).
+
+   RESULT
+       success - TRUE (1) if perform completed successfully, FALSE (0) on
+           timeout or perform failure.
+
+   SEE ALSO
+       HttpTransactionPerformAsync(), HttpTransactionIsComplete()
+
+amihttp.library/AbortHttpTransaction         amihttp.library/AbortHttpTransaction
+
+   NAME
+       AbortHttpTransaction -- Cancel in-progress transaction.  (V1)
+
+   SYNOPSIS
+       AbortHttpTransaction(txn);
+                            A0
+
+       VOID AbortHttpTransaction(struct HttpTransaction *txn);
+
+   FUNCTION
+       Sets abort flag, drops active connection, and causes blocking reads
+       to fail with ERROR_HTTP_ABORTED.
+
+   INPUTS
+       txn - HttpTransaction handle.
+
+   SEE ALSO
+       HttpTransactionPerform(), HttpTransactionReadBody()
+
+amihttp.library/HttpTransactionGetStatusCode
+                                      amihttp.library/HttpTransactionGetStatusCode
+
+   NAME
+       HttpTransactionGetStatusCode -- HTTP response status code.  (V1)
+
+   SYNOPSIS
+       code = HttpTransactionGetStatusCode(txn);
+       D0                                  A0
+
+       LONG HttpTransactionGetStatusCode(struct HttpTransaction *txn);
+
+   FUNCTION
+       Returns numeric HTTP status from the status line (e.g. 200, 404, 301).
+       Independent of HttpError() / GetLastError().
+
+   INPUTS
+       txn - HttpTransaction after successful Perform.
+
+   RESULT
+       code - HTTP status, or 0 if unavailable.
+
+   SEE ALSO
+       HttpTransactionGetStatusLine(), HttpTransactionGetLastError()
+
+amihttp.library/HttpTransactionGetStatusLine
+                                      amihttp.library/HttpTransactionGetStatusLine
+
+   NAME
+       HttpTransactionGetStatusLine -- Full HTTP status line.  (V1)
+
+   SYNOPSIS
+       line = HttpTransactionGetStatusLine(txn);
+       D0                                   A0
+
+       STRPTR HttpTransactionGetStatusLine(struct HttpTransaction *txn);
+
+   FUNCTION
+       Returns the raw status line (e.g. "HTTP/1.1 200 OK").  Pointer is
+       library-owned until DisposeHttpTransaction().
+
+   INPUTS
+       txn - HttpTransaction handle.
+
+   RESULT
+       line - STRPTR or NULL.
+
+   NOTES
+       Do not FreeVec() the returned pointer.
+
+   SEE ALSO
+       HttpTransactionGetStatusCode(), HttpTransactionRespHeader()
+
+amihttp.library/HttpTransactionRespHeader
+                                      amihttp.library/HttpTransactionRespHeader
+
+   NAME
+       HttpTransactionRespHeader -- Look up one response header.  (V1)
+
+   SYNOPSIS
+       value = HttpTransactionRespHeader(txn, name);
+       D0                                  A0   A1
+
+       STRPTR HttpTransactionRespHeader(struct HttpTransaction *, STRPTR);
+
+   FUNCTION
+       Case-insensitive lookup of a response header value.  Pointer valid
+       until DisposeHttpTransaction().
+
+   INPUTS
+       txn  - HttpTransaction after Perform.
+       name - header name (e.g. "Content-Type").
+
+   RESULT
+       value - header value STRPTR, or NULL if not present.
+
+   SEE ALSO
+       HttpTransactionRespHeaders()
+
+amihttp.library/HttpTransactionRespHeaders
+                                      amihttp.library/HttpTransactionRespHeaders
+
+   NAME
+       HttpTransactionRespHeaders -- List of all response headers.  (V1)
+
+   SYNOPSIS
+       list = HttpTransactionRespHeaders(txn);
+       D0                                  A0
+
+       struct List *HttpTransactionRespHeaders(struct HttpTransaction *);
+
+   FUNCTION
+       Returns pointer to a struct List of struct HttpHeader nodes
+       (hh_Name, hh_Value).  List is library-owned until dispose.
+
+   INPUTS
+       txn - HttpTransaction handle.
+
+   RESULT
+       list - struct List pointer, or NULL on bad handle.
+
+   SEE ALSO
+       HttpTransactionRespHeader(), <libraries/amihttp.h> struct HttpHeader
+
+amihttp.library/HttpTransactionReadBody
+                                      amihttp.library/HttpTransactionReadBody
+
+   NAME
+       HttpTransactionReadBody -- Stream response body bytes.  (V1)
+
+   SYNOPSIS
+       n = HttpTransactionReadBody(txn, buffer, buflen);
+       D0                            A0   A1       D0
+
+       LONG HttpTransactionReadBody(struct HttpTransaction *, APTR, ULONG);
+
+   FUNCTION
+       Copies up to buflen decoded body bytes into caller buffer.  Call in a
+       loop until 0 is returned.  Chunked transfer and Content-Length clamping
+       are handled internally.  gzip Content-Encoding returns
+       ERROR_HTTP_NOT_IMPLEMENTED until decode is wired.
+
+       Invokes HTHK_BODY_CHUNK hook after each successful copy.
+
+   INPUTS
+       txn    - HttpTransaction after Perform.
+       buffer - destination buffer (caller allocated).
+       buflen - size of buffer (capped internally to 8192).
+
+   RESULT
+       n - bytes copied (>0), or 0 at EOF or on failure (check HttpError()
+           and HttpTransactionGetLastError()).
+
+   NOTES
+       Perform must complete before ReadBody.  For HEAD or HTTA_NO_BODY,
+       ReadBody always returns 0.
+
+   SEE ALSO
+       HttpTransactionPerform(), HttpTransactionGetBytesReceived(),
+       HttpTransactionGetContentLength()
+
+amihttp.library/HttpTransactionGetRedirectLocation
+                              amihttp.library/HttpTransactionGetRedirectLocation
+
+   NAME
+       HttpTransactionGetRedirectLocation -- Location header value.  (V1)
+
+   SYNOPSIS
+       url = HttpTransactionGetRedirectLocation(txn);
+       D0                                       A0
+
+       STRPTR HttpTransactionGetRedirectLocation(struct HttpTransaction *);
+
+   FUNCTION
+       Returns redirect URL from Location header when status is 3xx.
+       Library-owned until DisposeHttpTransaction().
+
+   INPUTS
+       txn - HttpTransaction after Perform.
+
+   RESULT
+       url - STRPTR or NULL.
+
+   SEE ALSO
+       HttpTransactionGetStatusCode(), HTSA_FOLLOW_REDIRECTS
+
+amihttp.library/HttpTransactionGetContentLength
+                              amihttp.library/HttpTransactionGetContentLength
+
+   NAME
+       HttpTransactionGetContentLength -- Content-Length if known.  (V1)
+
+   SYNOPSIS
+       len = HttpTransactionGetContentLength(txn);
+       D0                                    A0
+
+       LONG HttpTransactionGetContentLength(struct HttpTransaction *);
+
+   FUNCTION
+       Returns parsed Content-Length, or -1 if unknown (chunked encoding).
+
+   INPUTS
+       txn - HttpTransaction handle.
+
+   RESULT
+       len - byte count or -1.
+
+   SEE ALSO
+       HttpTransactionGetBytesReceived(), HttpTransactionReadBody()
+
+amihttp.library/HttpTransactionGetBytesReceived
+                              amihttp.library/HttpTransactionGetBytesReceived
+
+   NAME
+       HttpTransactionGetBytesReceived -- Body bytes read so far.  (V1)
+
+   SYNOPSIS
+       total = HttpTransactionGetBytesReceived(txn);
+       D0                                        A0
+
+       ULONG HttpTransactionGetBytesReceived(struct HttpTransaction *);
+
+   FUNCTION
+       Running total of body octets delivered through ReadBody.
+
+   INPUTS
+       txn - HttpTransaction handle.
+
+   RESULT
+       total - bytes received.
+
+   SEE ALSO
+       HttpTransactionReadBody()
+
+amihttp.library/HttpTransactionGetTiming     amihttp.library/HttpTransactionGetTiming
+
+   NAME
+       HttpTransactionGetTiming -- Connection timing metrics.  (V1)
+
+   SYNOPSIS
+       success = HttpTransactionGetTiming(txn, timing);
+       D0                                 A0   A1
+
+       LONG HttpTransactionGetTiming(struct HttpTransaction *,
+           struct HttpTiming *);
+
+   FUNCTION
+       Fills struct HttpTiming (connect, TTFB, total milliseconds).  Fields
+       may be zero until timing instrumentation is complete.
+
+   INPUTS
+       txn    - HttpTransaction handle.
+       timing - caller-allocated struct HttpTiming.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       struct HttpTiming in <libraries/amihttp.h>
+
+amihttp.library/HttpTransactionGetLastError
+                                      amihttp.library/HttpTransactionGetLastError
+
+   NAME
+       HttpTransactionGetLastError -- Per-transaction error code.  (V1)
+
+   SYNOPSIS
+       code = HttpTransactionGetLastError(txn);
+       D0                                 A0
+
+       LONG HttpTransactionGetLastError(struct HttpTransaction *);
+
+   FUNCTION
+       Returns last ERROR_HTTP_* for this transaction.  Separate from HTTP
+       status code.
+
+   INPUTS
+       txn - HttpTransaction handle.
+
+   RESULT
+       code - ERROR_HTTP_* or 0.
+
+   SEE ALSO
+       HttpError(), HttpTransactionGetStatusCode()
+
+amihttp.library/SetHttpTransactionHook     amihttp.library/SetHttpTransactionHook
+
+   NAME
+       SetHttpTransactionHook -- Install transaction hook.  (V1)
+
+   SYNOPSIS
+       success = SetHttpTransactionHook(txn, type, hook);
+       D0                               A0   D0    A1
+
+       LONG SetHttpTransactionHook(struct HttpTransaction *, ULONG,
+           struct Hook *);
+
+   FUNCTION
+       Overrides session hook for the given HTHK_* type on this transaction.
+
+   SEE ALSO
+       SetHttpSessionHook(), amihttp.library/hooks
+
+amihttp.library/HttpTransactionGetPeerCert amihttp.library/HttpTransactionGetPeerCert
+
+   NAME
+       HttpTransactionGetPeerCert -- Copy TLS peer certificate fields.  (V1)
+
+   SYNOPSIS
+       success = HttpTransactionGetPeerCert(txn, cert);
+       D0                                   A0   A1
+
+       LONG HttpTransactionGetPeerCert(struct HttpTransaction *,
+           struct HttpSslPeerCert *);
+
+   FUNCTION
+       After HTTPS Perform, fills struct HttpSslPeerCert with strdup'd
+       strings.  Caller must HttpPeerCertFree() when done.
+
+   INPUTS
+       txn  - HttpTransaction after HTTPS Perform.
+       cert - caller-allocated struct HttpSslPeerCert (zeroed on input).
+
+   RESULT
+       success - TRUE (1) if certificate present, FALSE (0) if none or HTTP.
+
+   SEE ALSO
+       HttpPeerCertFree(), struct HttpSslPeerCert
+
+amihttp.library/HttpPeerCertFree                 amihttp.library/HttpPeerCertFree
+
+   NAME
+       HttpPeerCertFree -- Free certificate strings from GetPeerCert.  (V1)
+
+   SYNOPSIS
+       HttpPeerCertFree(cert);
+                        A0
+
+       VOID HttpPeerCertFree(struct HttpSslPeerCert *cert);
+
+   FUNCTION
+       Frees STRPTR fields allocated by HttpTransactionGetPeerCert().
+
+   INPUTS
+       cert - struct HttpSslPeerCert from GetPeerCert.
+
+   SEE ALSO
+       HttpTransactionGetPeerCert()
+
+amihttp.library/OpenHttpConnection             amihttp.library/OpenHttpConnection
+
+   NAME
+       OpenHttpConnection -- Open Tier 3 streaming connection.  (V1)
+
+   SYNOPSIS
+       conn = OpenHttpConnection(session, host, port, ssl);
+       D0                          A0       A1    D0    D1
+
+       struct HttpConnection *OpenHttpConnection(struct HttpSession *,
+           STRPTR host, ULONG port, BOOL ssl);
+
+   FUNCTION
+       Acquires pooled TCP or TLS connection to host:port.  port 0 selects
+       default (80 or 443).  Caller sends raw bytes or uses higher-level
+       helpers when implemented.
+
+   INPUTS
+       session - HttpSession handle.
+       host    - hostname.
+       port    - TCP port, or 0 for default.
+       ssl     - TRUE for HTTPS.
+
+   RESULT
+       conn - HttpConnection handle, or NULL on failure.
+
+   SEE ALSO
+       CloseHttpConnection(), HttpConnectionReadResponseHeaders()
+
+amihttp.library/CloseHttpConnection           amihttp.library/CloseHttpConnection
+
+   NAME
+       CloseHttpConnection -- Close Tier 3 connection.  (V1)
+
+   SYNOPSIS
+       CloseHttpConnection(conn);
+                           A0
+
+       VOID CloseHttpConnection(struct HttpConnection *conn);
+
+   FUNCTION
+       Returns connection to pool or closes it.  Invalidates header pointers
+       from Tier 3 accessors.
+
+   INPUTS
+       conn - HttpConnection handle.
+
+   SEE ALSO
+       OpenHttpConnection()
+
+amihttp.library/HttpConnectionWrite           amihttp.library/HttpConnectionWrite
+
+   NAME
+       HttpConnectionWrite -- Write raw bytes to connection.  (V1)
+
+   SYNOPSIS
+       success = HttpConnectionWrite(conn, buffer, len);
+       D0                            A0    A1       D0
+
+       LONG HttpConnectionWrite(struct HttpConnection *, APTR, ULONG);
+
+   FUNCTION
+       Sends bytes on the wire (plain or TLS).  Caller is responsible for
+       HTTP framing unless using HttpConnectionSendRequest() when available.
+
+   INPUTS
+       conn   - open HttpConnection.
+       buffer - data to send.
+       len    - byte count.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       HttpConnectionRead(), OpenHttpConnection()
+
+amihttp.library/HttpConnectionRead             amihttp.library/HttpConnectionRead
+
+   NAME
+       HttpConnectionRead -- Read raw bytes from connection.  (V1)
+
+   SYNOPSIS
+       n = HttpConnectionRead(conn, buffer, len);
+       D0                     A0    A1       D0
+
+       LONG HttpConnectionRead(struct HttpConnection *, APTR, ULONG);
+
+   FUNCTION
+       Receives up to len bytes from socket/SSL into caller buffer.
+
+   INPUTS
+       conn   - open HttpConnection.
+       buffer - receive buffer.
+       len    - buffer size.
+
+   RESULT
+       n - bytes read (>=0), or failure via LVO FALSE/0 and HttpError().
+
+   SEE ALSO
+       HttpConnectionWrite()
+
+amihttp.library/HttpConnectionSendRequest amihttp.library/HttpConnectionSendRequest
+
+   NAME
+       HttpConnectionSendRequest -- Send HTTP request on connection.  (V1)
+
+   SYNOPSIS
+       success = HttpConnectionSendRequest(conn, method, path, tags);
+       D0                                    A0    A1      A2    A3
+
+       LONG HttpConnectionSendRequest(struct HttpConnection *, STRPTR method,
+           STRPTR path, struct TagItem *tags);
+
+   FUNCTION
+       Reserved Tier 3 API.  Currently returns ERROR_HTTP_NOT_IMPLEMENTED.
+
+   SEE ALSO
+       HttpConnectionReadResponseHeaders(), amihttp.library/tags HTTR_*
+
+amihttp.library/HttpConnectionReadResponseLine
+                              amihttp.library/HttpConnectionReadResponseLine
+
+   NAME
+       HttpConnectionReadResponseLine -- Copy status line to buffer.  (V1)
+
+   SYNOPSIS
+       len = HttpConnectionReadResponseLine(conn, buffer, buflen);
+       D0                                     A0    A1       D0
+
+       LONG HttpConnectionReadResponseLine(struct HttpConnection *, STRPTR,
+           ULONG buflen);
+
+   FUNCTION
+       Copies status line into caller buffer after
+       HttpConnectionReadResponseHeaders().  Does not read from wire by
+       itself.
+
+   INPUTS
+       conn   - HttpConnection after ReadResponseHeaders.
+       buffer - caller buffer.
+       buflen - buffer size.
+
+   RESULT
+       len - string length copied, or 0.
+
+   SEE ALSO
+       HttpConnectionReadResponseHeaders(), HttpConnectionGetStatusLine()
+
+amihttp.library/HttpConnectionReadResponseHeaders
+                          amihttp.library/HttpConnectionReadResponseHeaders
+
+   NAME
+       HttpConnectionReadResponseHeaders -- Parse response headers.  (V1)
+
+   SYNOPSIS
+       success = HttpConnectionReadResponseHeaders(conn);
+       D0                                            A0
+
+       LONG HttpConnectionReadResponseHeaders(struct HttpConnection *);
+
+   FUNCTION
+       Reads and parses HTTP response status line and headers into internal
+       HttpHeader list.  Positions read cursor at entity body.  Use
+       HttpConnectionRespHeader() or HttpConnectionRespHeaders() to query.
+
+   INPUTS
+       conn - open HttpConnection with request already sent.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       HttpConnectionRespHeaders(), HttpConnectionGetStatusCode()
+
+amihttp.library/HttpConnectionRespHeader amihttp.library/HttpConnectionRespHeader
+
+   NAME
+       HttpConnectionRespHeader -- Look up Tier 3 response header.  (V1)
+
+   SYNOPSIS
+       value = HttpConnectionRespHeader(conn, name);
+       D0                                 A0    A1
+
+       STRPTR HttpConnectionRespHeader(struct HttpConnection *, STRPTR);
+
+   FUNCTION
+       Case-insensitive header lookup after ReadResponseHeaders.  Valid until
+       CloseHttpConnection().
+
+   INPUTS
+       conn - HttpConnection handle.
+       name - header name.
+
+   RESULT
+       value - STRPTR or NULL.
+
+   SEE ALSO
+       HttpConnectionRespHeaders()
+
+amihttp.library/HttpConnectionRespHeaders
+                                      amihttp.library/HttpConnectionRespHeaders
+
+   NAME
+       HttpConnectionRespHeaders -- Tier 3 header list.  (V1)
+
+   SYNOPSIS
+       list = HttpConnectionRespHeaders(conn);
+       D0                                 A0
+
+       struct List *HttpConnectionRespHeaders(struct HttpConnection *);
+
+   FUNCTION
+       Returns struct List of struct HttpHeader nodes for this connection.
+
+   INPUTS
+       conn - HttpConnection after ReadResponseHeaders.
+
+   RESULT
+       list - library-owned list pointer.
+
+   SEE ALSO
+       HttpConnectionRespHeader()
+
+amihttp.library/HttpConnectionGetStatusCode
+                                      amihttp.library/HttpConnectionGetStatusCode
+
+   NAME
+       HttpConnectionGetStatusCode -- HTTP status from Tier 3 parse.  (V1)
+
+   SYNOPSIS
+       code = HttpConnectionGetStatusCode(conn);
+       D0                                   A0
+
+       LONG HttpConnectionGetStatusCode(struct HttpConnection *);
+
+   FUNCTION
+       Numeric status code after HttpConnectionReadResponseHeaders().
+
+   INPUTS
+       conn - HttpConnection handle.
+
+   RESULT
+       code - HTTP status or 0.
+
+   SEE ALSO
+       HttpConnectionGetStatusLine()
+
+amihttp.library/HttpConnectionGetStatusLine
+                                      amihttp.library/HttpConnectionGetStatusLine
+
+   NAME
+       HttpConnectionGetStatusLine -- Status line STRPTR.  (V1)
+
+   SYNOPSIS
+       line = HttpConnectionGetStatusLine(conn);
+       D0                                   A0
+
+       STRPTR HttpConnectionGetStatusLine(struct HttpConnection *);
+
+   FUNCTION
+       Library-owned status line after ReadResponseHeaders.
+
+   INPUTS
+       conn - HttpConnection handle.
+
+   RESULT
+       line - STRPTR or NULL.
+
+   SEE ALSO
+       HttpConnectionReadResponseLine()
+
+amihttp.library/HttpConnectionReadBodyChunk
+                                      amihttp.library/HttpConnectionReadBodyChunk
+
+   NAME
+       HttpConnectionReadBodyChunk -- Read decoded body chunk (Tier 3).  (V1)
+
+   SYNOPSIS
+       n = HttpConnectionReadBodyChunk(conn, buffer, buflen);
+       D0                              A0    A1       D0
+
+       LONG HttpConnectionReadBodyChunk(struct HttpConnection *, APTR, ULONG);
+
+   FUNCTION
+       Not yet implemented.  Returns ERROR_HTTP_NOT_IMPLEMENTED.
+
+   SEE ALSO
+       HttpTransactionReadBody()
+
+amihttp.library/HttpConnectionWriteBodyChunk
+                                      amihttp.library/HttpConnectionWriteBodyChunk
+
+   NAME
+       HttpConnectionWriteBodyChunk -- Write request body chunk (Tier 3).  (V1)
+
+   SYNOPSIS
+       success = HttpConnectionWriteBodyChunk(conn, buffer, len);
+       D0                                     A0    A1       D0
+
+       LONG HttpConnectionWriteBodyChunk(struct HttpConnection *, APTR, ULONG);
+
+   FUNCTION
+       Not yet implemented.  Returns ERROR_HTTP_NOT_IMPLEMENTED.
+
+   SEE ALSO
+       HttpConnectionWrite()
+
+amihttp.library/HttpConnectionIsAlive           amihttp.library/HttpConnectionIsAlive
+
+   NAME
+       HttpConnectionIsAlive -- Test connection open.  (V1)
+
+   SYNOPSIS
+       alive = HttpConnectionIsAlive(conn);
+       D0                            A0
+
+       BOOL HttpConnectionIsAlive(struct HttpConnection *);
+
+   FUNCTION
+       Returns TRUE if underlying socket is open.
+
+   INPUTS
+       conn - HttpConnection handle.
+
+   RESULT
+       alive - TRUE or FALSE.
+
+   SEE ALSO
+       OpenHttpConnection(), CloseHttpConnection()
+
+amihttp.library/ResetHttpConnection           amihttp.library/ResetHttpConnection
+
+   NAME
+       ResetHttpConnection -- Clear parse state on connection.  (V1)
+
+   SYNOPSIS
+       ResetHttpConnection(conn);
+                           A0
+
+       VOID ResetHttpConnection(struct HttpConnection *conn);
+
+   FUNCTION
+       Clears parsed headers and receive buffer positions for another
+       request/response on a keep-alive connection.
+
+   INPUTS
+       conn - HttpConnection handle.
+
+   SEE ALSO
+       HttpConnectionReadResponseHeaders()
+
+amihttp.library/ParseHttpUrl                       amihttp.library/ParseHttpUrl
+
+   NAME
+       ParseHttpUrl -- Parse URL into components.  (V1)
+
+   SYNOPSIS
+       url = ParseHttpUrl(string);
+       D0                 A0
+
+       struct ParsedUrl *ParseHttpUrl(STRPTR string);
+
+   FUNCTION
+       Allocates ParsedUrl with pu_Scheme, pu_Host, pu_Port, pu_Path, etc.
+       Dispose with DisposeHttpUrl().
+
+   INPUTS
+       string - absolute or relative URL string.
+
+   RESULT
+       url - ParsedUrl pointer, or NULL on failure.
+
+   SEE ALSO
+       DisposeHttpUrl(), BuildHttpUrl()
+
+amihttp.library/DisposeHttpUrl                   amihttp.library/DisposeHttpUrl
+
+   NAME
+       DisposeHttpUrl -- Free ParsedUrl strings.  (V1)
+
+   SYNOPSIS
+       DisposeHttpUrl(url);
+                      A0
+
+       VOID DisposeHttpUrl(struct ParsedUrl *url);
+
+   FUNCTION
+       Frees all fields allocated by ParseHttpUrl().
+
+   INPUTS
+       url - ParsedUrl pointer, or NULL.
+
+   SEE ALSO
+       ParseHttpUrl()
+
+amihttp.library/BuildHttpUrl                       amihttp.library/BuildHttpUrl
+
+   NAME
+       BuildHttpUrl -- Reconstruct URL string from ParsedUrl.  (V1)
+
+   SYNOPSIS
+       str = BuildHttpUrl(url);
+       D0               A0
+
+       STRPTR BuildHttpUrl(struct ParsedUrl *url);
+
+   FUNCTION
+       Allocates canonical URL string.  Caller frees with dos Free().
+
+   INPUTS
+       url - populated ParsedUrl.
+
+   RESULT
+       str - allocated STRPTR or NULL.
+
+   SEE ALSO
+       ParseHttpUrl(), HttpJoinUri()
+
+amihttp.library/HttpUrlEncode                     amihttp.library/HttpUrlEncode
+
+   NAME
+       HttpUrlEncode -- Percent-encode a string.  (V1)
+
+   SYNOPSIS
+       str = HttpUrlEncode(string);
+       D0                  A0
+
+       STRPTR HttpUrlEncode(STRPTR string);
+
+   FUNCTION
+       application/x-www-form-urlencoded style encoding.  Caller frees
+       result with Free().
+
+   INPUTS
+       string - input text.
+
+   RESULT
+       str - encoded string or NULL.
+
+   SEE ALSO
+       HttpUrlDecode(), HttpPathEncode()
+
+amihttp.library/HttpUrlDecode                     amihttp.library/HttpUrlDecode
+
+   NAME
+       HttpUrlDecode -- Percent-decode a string.  (V1)
+
+   SYNOPSIS
+       str = HttpUrlDecode(string);
+       D0                  A0
+
+       STRPTR HttpUrlDecode(STRPTR string);
+
+   FUNCTION
+       Decodes %XX sequences.  Caller frees with Free().
+
+   SEE ALSO
+       HttpUrlEncode()
+
+amihttp.library/HttpPathEncode                   amihttp.library/HttpPathEncode
+
+   NAME
+       HttpPathEncode -- Encode URL path segment.  (V1)
+
+   SYNOPSIS
+       str = HttpPathEncode(path);
+       D0                 A0
+
+       STRPTR HttpPathEncode(STRPTR path);
+
+   FUNCTION
+       Encodes path for use in URL.  Caller frees with Free().
+
+   SEE ALSO
+       HttpUrlEncode()
+
+amihttp.library/HttpBuildQueryString         amihttp.library/HttpBuildQueryString
+
+   NAME
+       HttpBuildQueryString -- Build query string from pairs.  (V1)
+
+   SYNOPSIS
+       str = HttpBuildQueryString(pairs);
+       D0                       A0
+
+       STRPTR HttpBuildQueryString(struct List *pairs);
+
+   FUNCTION
+       Walks struct List of struct HttpQueryPair nodes and builds
+       name=value&name=value string.  Caller frees with Free().
+
+   INPUTS
+       pairs - list of HttpQueryPair (hqp_Name, hqp_Value).
+
+   RESULT
+       str - query string without leading '?', or NULL.
+
+   SEE ALSO
+       struct HttpQueryPair, HttpUrlEncode()
+
+amihttp.library/HttpUriSchemePart             amihttp.library/HttpUriSchemePart
+
+   NAME
+       HttpUriSchemePart -- Extract scheme from URL.  (V1)
+
+   SYNOPSIS
+       str = HttpUriSchemePart(url);
+       D0                    A0
+
+       STRPTR HttpUriSchemePart(STRPTR url);
+
+   FUNCTION
+       Returns allocated scheme (e.g. "http", "https").  Caller Free().
+
+   SEE ALSO
+       HttpUriHostPart(), HttpUriPathPart(), ParseHttpUrl()
+
+amihttp.library/HttpUriHostPart                 amihttp.library/HttpUriHostPart
+
+   NAME
+       HttpUriHostPart -- Extract host from URL.  (V1)
+
+   SYNOPSIS
+       str = HttpUriHostPart(url);
+       D0                  A0
+
+       STRPTR HttpUriHostPart(STRPTR url);
+
+   FUNCTION
+       Returns allocated host portion.  Caller Free().
+
+   SEE ALSO
+       HttpUriAuthorityPart()
+
+amihttp.library/HttpUriPathPart                 amihttp.library/HttpUriPathPart
+
+   NAME
+       HttpUriPathPart -- Extract path from URL.  (V1)
+
+   SYNOPSIS
+       str = HttpUriPathPart(url);
+       D0                  A0
+
+       STRPTR HttpUriPathPart(STRPTR url);
+
+   FUNCTION
+       Returns path including leading slash.  Caller Free().
+
+   SEE ALSO
+       HttpUriFilePart(), HttpUriParentPart()
+
+amihttp.library/HttpUriFilePart                 amihttp.library/HttpUriFilePart
+
+   NAME
+       HttpUriFilePart -- Extract final path component.  (V1)
+
+   SYNOPSIS
+       str = HttpUriFilePart(url);
+       D0                  A0
+
+       STRPTR HttpUriFilePart(STRPTR url);
+
+   FUNCTION
+       Like dos FilePart() for URLs.  Caller Free().
+
+   SEE ALSO
+       HttpUriPathPart()
+
+amihttp.library/HttpUriQueryPart               amihttp.library/HttpUriQueryPart
+
+   NAME
+       HttpUriQueryPart -- Extract query string.  (V1)
+
+   SYNOPSIS
+       str = HttpUriQueryPart(url);
+       D0                   A0
+
+       STRPTR HttpUriQueryPart(STRPTR url);
+
+   FUNCTION
+       Returns query without '?'.  Caller Free().
+
+   SEE ALSO
+       HttpBuildQueryString()
+
+amihttp.library/HttpUriParentPart             amihttp.library/HttpUriParentPart
+
+   NAME
+       HttpUriParentPart -- Parent path of URL.  (V1)
+
+   SYNOPSIS
+       str = HttpUriParentPart(url);
+       D0                    A0
+
+       STRPTR HttpUriParentPart(STRPTR url);
+
+   FUNCTION
+       Like dos ParentDir() for URL paths.  Caller Free().
+
+   SEE ALSO
+       HttpUriPathPart()
+
+amihttp.library/HttpUriAuthorityPart     amihttp.library/HttpUriAuthorityPart
+
+   NAME
+       HttpUriAuthorityPart -- host[:port] authority.  (V1)
+
+   SYNOPSIS
+       str = HttpUriAuthorityPart(url);
+       D0                       A0
+
+       STRPTR HttpUriAuthorityPart(STRPTR url);
+
+   FUNCTION
+       Returns authority component.  Caller Free().
+
+   SEE ALSO
+       HttpUriHostPart()
+
+amihttp.library/HttpJoinUri                         amihttp.library/HttpJoinUri
+
+   NAME
+       HttpJoinUri -- Resolve relative URL against base.  (V1)
+
+   SYNOPSIS
+       url = HttpJoinUri(base, relative);
+       D0                A0    A1
+
+       STRPTR HttpJoinUri(STRPTR base_url, STRPTR relative_url);
+
+   FUNCTION
+       RFC 3986 relative resolution (redirect Location, HTML links).  Caller
+       frees result with Free().
+
+   INPUTS
+       base     - absolute base URL.
+       relative - relative or absolute reference.
+
+   RESULT
+       url - allocated absolute URL or NULL.
+
+   SEE ALSO
+       ParseHttpUrl(), HttpTransactionPerform()
+
+amihttp.library/NewHttpCookieJar                 amihttp.library/NewHttpCookieJar
+
+   NAME
+       NewHttpCookieJar -- Allocate cookie storage.  (V1)
+
+   SYNOPSIS
+       jar = NewHttpCookieJar();
+       D0
+
+       struct HttpCookieJar *NewHttpCookieJar(VOID);
+
+   FUNCTION
+       Creates empty cookie jar for HttpSessionAttachCookieJar().
+
+   RESULT
+       jar - handle or NULL.
+
+   SEE ALSO
+       DisposeHttpCookieJar(), HttpSessionAttachCookieJar()
+
+amihttp.library/DisposeHttpCookieJar         amihttp.library/DisposeHttpCookieJar
+
+   NAME
+       DisposeHttpCookieJar -- Free cookie jar.  (V1)
+
+   SYNOPSIS
+       DisposeHttpCookieJar(jar);
+                            A0
+
+       VOID DisposeHttpCookieJar(struct HttpCookieJar *jar);
+
+   FUNCTION
+       Detach from any session before disposing.
+
+   INPUTS
+       jar - cookie jar handle.
+
+   SEE ALSO
+       NewHttpCookieJar()
+
+amihttp.library/LoadHttpCookieJar               amihttp.library/LoadHttpCookieJar
+
+   NAME
+       LoadHttpCookieJar -- Load Netscape cookie file.  (V1)
+
+   SYNOPSIS
+       success = LoadHttpCookieJar(jar, filename);
+       D0                            A0   A1
+
+       LONG LoadHttpCookieJar(struct HttpCookieJar *, STRPTR filename);
+
+   FUNCTION
+       Reads cookies from disk into jar.
+
+   INPUTS
+       jar      - cookie jar.
+       filename - path to cookie file.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       SaveHttpCookieJar()
+
+amihttp.library/SaveHttpCookieJar               amihttp.library/SaveHttpCookieJar
+
+   NAME
+       SaveHttpCookieJar -- Write Netscape cookie file.  (V1)
+
+   SYNOPSIS
+       success = SaveHttpCookieJar(jar, filename);
+       D0                            A0   A1
+
+       LONG SaveHttpCookieJar(struct HttpCookieJar *, STRPTR filename);
+
+   FUNCTION
+       Persists jar contents to disk.
+
+   INPUTS
+       jar      - cookie jar.
+       filename - output path.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       LoadHttpCookieJar()
+
+amihttp.library/FlushHttpCookieJar             amihttp.library/FlushHttpCookieJar
+
+   NAME
+       FlushHttpCookieJar -- Trim cookie count.  (V1)
+
+   SYNOPSIS
+       FlushHttpCookieJar(jar, max_count);
+                          A0   D0
+
+       VOID FlushHttpCookieJar(struct HttpCookieJar *, ULONG max_count);
+
+   FUNCTION
+       Removes oldest cookies until at most max_count remain.
+
+   INPUTS
+       jar       - cookie jar.
+       max_count - maximum cookies to keep.
+
+   SEE ALSO
+       NewHttpCookieJar()
+
+amihttp.library/SetHttpCookie                       amihttp.library/SetHttpCookie
+
+   NAME
+       SetHttpCookie -- Add cookie from Set-Cookie line.  (V1)
+
+   SYNOPSIS
+       success = SetHttpCookie(jar, cookie_line);
+       D0                      A0   A1
+
+       LONG SetHttpCookie(struct HttpCookieJar *, STRPTR cookie_line);
+
+   FUNCTION
+       Parses Set-Cookie / Cookie header line into jar (document.cookie
+       style API).
+
+   INPUTS
+       jar         - cookie jar.
+       cookie_line - full cookie spec string.
+
+   RESULT
+       success - TRUE (1) or FALSE (0).
+
+   SEE ALSO
+       GetHttpCookieString()
+
+amihttp.library/GetHttpCookieString           amihttp.library/GetHttpCookieString
+
+   NAME
+       GetHttpCookieString -- Cookie header value for URL.  (V1)
+
+   SYNOPSIS
+       str = GetHttpCookieString(jar, url);
+       D0                        A0   A1
+
+       STRPTR GetHttpCookieString(struct HttpCookieJar *, STRPTR url);
+
+   FUNCTION
+       Builds Cookie: header payload for given request URL.  Caller frees
+       with Free().
+
+   INPUTS
+       jar - cookie jar.
+       url - request URL for domain/path matching.
+
+   RESULT
+       str - "name=value; name2=value2" or NULL if none.
+
+   SEE ALSO
+       SetHttpCookie(), HttpSessionAttachCookieJar()

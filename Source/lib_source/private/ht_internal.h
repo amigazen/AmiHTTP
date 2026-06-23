@@ -27,6 +27,7 @@
 #define HT_MAGIC_SESSION    0x48545353UL
 #define HT_MAGIC_TXN        0x48545458UL
 #define HT_MAGIC_CONN       0x4854434EUL
+#define HT_MAGIC_STREAM     0x48545343UL
 #define HT_MAGIC_JAR        0x48544A52UL
 #define HT_MAGIC_URL        0x48545552UL
 
@@ -72,6 +73,22 @@ struct Http_cc_accum
 void Http_cc_reset_accum(struct Http_cc_accum *a);
 void Http_cc_parse(STRPTR v, struct Http_cc_accum *out);
 void Http_cc_merge(struct Http_cc_accum *dst, struct Http_cc_accum *src);
+
+/*
+ * Tier 3 public HttpConnection handle (opaque to callers).
+ */
+struct HtStreamConn
+{
+    ULONG               hsc_Magic;
+    struct HttpSession *hsc_Session;
+    struct HtConnection *hsc_Conn;
+    STRPTR              hsc_StatusLine;
+    LONG                hsc_StatusCode;
+    struct List         hsc_RespHeaders;
+    LONG                hsc_ContentLength;
+    ULONG               hsc_BytesReceived;
+    ULONG               hsc_Flags;
+};
 
 struct HtConnection
 {
@@ -149,6 +166,11 @@ struct HttpTransaction
     ULONG               ht_Flags;
     LONG                ht_LastError;
     BOOL                ht_Async;
+    BOOL                ht_AsyncRunning;
+    LONG                ht_AsyncResult;
+    struct Task        *ht_NotifyTask;
+    ULONG               ht_NotifySignal;
+    struct Task        *ht_WorkerTask;
     BOOL                ht_Complete;
     struct Hook         *ht_Hooks[8];
     struct HttpTiming   ht_Timing;
@@ -272,7 +294,19 @@ LONG ht_http_read_response_headers(struct AmiHttpBase *base,
     struct HttpTransaction *txn);
 LONG ht_http_read_body(struct AmiHttpBase *base, struct HttpTransaction *txn,
     APTR buffer, ULONG buflen);
+LONG ht_http_read_stream_headers(struct AmiHttpBase *base,
+    struct HttpSession *session, struct HtConnection *conn,
+    struct List *resp_headers, STRPTR *status_line, LONG *status_code,
+    LONG *content_length, ULONG *flags);
 STRPTR ht_txn_user_agent(struct HttpTransaction *txn);
+
+/* ht_async.c */
+LONG ht_async_start(struct HttpTransaction *txn);
+VOID ht_async_wait(struct HttpTransaction *txn, ULONG timeout_secs);
+VOID ht_async_cancel(struct HttpTransaction *txn);
+
+/* transaction.c - shared sync perform for worker task */
+LONG ht_txn_perform_sync(struct HttpTransaction *txn);
 
 /* session.c / transaction.c - LVO bodies declared in amihttp_funcs.h */
 

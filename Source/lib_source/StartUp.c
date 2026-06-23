@@ -112,6 +112,10 @@ APTR FuncTab[] = {
     (APTR)HttpConnectionWriteBodyChunk,
     (APTR)HttpConnectionIsAlive,
     (APTR)ResetHttpConnection,
+    (APTR)HttpConnectionRespHeader,
+    (APTR)HttpConnectionRespHeaders,
+    (APTR)HttpConnectionGetStatusCode,
+    (APTR)HttpConnectionGetStatusLine,
     /* URL utilities */
     (APTR)ParseHttpUrl,
     (APTR)DisposeHttpUrl,
@@ -173,6 +177,8 @@ __ASM__ __SAVE_DS__ InitLib(
     base->ahb_IdleTimeout = 15;
     base->ahb_SslVerify = HTSSL_VERIFY_PEER;
     base->ahb_DefaultTimeout = 60;
+    base->ahb_ZBase = NULL;
+    base->ahb_ZDecodeReady = FALSE;
 
     if (L_OpenLibs(base) != 0) {
         htDbgPut("InitLib: L_OpenLibs failed");

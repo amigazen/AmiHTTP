@@ -29,6 +29,7 @@ int main(int argc, char **argv)
     LONG status;
     LONG n;
     ULONG total;
+    ULONG notify_sig;
     UBYTE buf[4096];
     STRPTR url;
     STRPTR ctype;
@@ -41,6 +42,7 @@ int main(int argc, char **argv)
     }
 
     url = (STRPTR)argv[1];
+    notify_sig = (ULONG)-1;
     Printf("async_demo: url='%s'\n", url);
     Flush(Output());
 
@@ -75,10 +77,20 @@ int main(int argc, char **argv)
     }
 
     ht_dbg("SetHttpTransactionAttrs");
+    notify_sig = AllocSignal(-1L);
+    if (notify_sig == (ULONG)-1) {
+        Printf("async_demo: AllocSignal failed\n");
+        DisposeHttpTransaction(txn);
+        DisposeHttpSession(session);
+        CloseLibrary(HttpBase);
+        return 20;
+    }
     SetHttpTransactionAttrs(
         txn,
-        HTTA_URL,    (ULONG)url,
-        HTTA_METHOD, (ULONG)"GET",
+        HTTA_URL,             (ULONG)url,
+        HTTA_METHOD,          (ULONG)"GET",
+        HTTA_NOTIFY_TASK,     (ULONG)FindTask(NULL),
+        HTTA_NOTIFY_SIGNAL,   notify_sig,
         TAG_DONE);
 
     ht_dbg("HttpTransactionPerformAsync");
@@ -131,6 +143,9 @@ int main(int argc, char **argv)
     }
 
     ht_dbg("cleanup");
+    if (notify_sig != (ULONG)-1) {
+        FreeSignal(notify_sig);
+    }
     DisposeHttpTransaction(txn);
     DisposeHttpSession(session);
     CloseLibrary(HttpBase);

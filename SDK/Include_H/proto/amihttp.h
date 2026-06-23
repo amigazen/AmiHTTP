@@ -76,7 +76,7 @@ extern struct Library * HttpBase;
 #endif /* _NO_INLINE */
 
 /****************************************************************************/
-/* Variadic tag wrappers                                                    */
+/* Variadic tag wrappers (mirror SocketBaseTags / SetWindowAttrs pattern)   */
 /****************************************************************************/
 
 #ifndef HT_VARARGS_DEFINED

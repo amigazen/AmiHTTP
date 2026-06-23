@@ -28,6 +28,7 @@ extern int h_errno;
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <sys/ioctl.h>
 
 #include <libraries/bsdsocket.h>
 #include <proto/bsdsocket.h>
@@ -111,17 +112,59 @@ ht_ensure_bsdsocket(struct AmiHttpBase *base)
 }
 
 static LONG
-ht_tcp_connect(LONG sock, struct hostent *hent, ULONG port)
+ht_tcp_connect(LONG sock, struct hostent *hent, ULONG port, ULONG timeout_secs)
 {
     struct sockaddr_in sad;
     LONG result;
+    ULONG one;
+    fd_set wfds;
+    struct timeval tv;
+    LONG nfds;
+    LONG rc;
+    LONG soerr;
+    LONG soerrlen;
 
     sad.sin_len = sizeof(sad);
     sad.sin_family = hent->h_addrtype;
     sad.sin_port = htons((UWORD)port);
     sad.sin_addr.s_addr = *(ULONG *)(*hent->h_addr_list);
+    /*
+     * Avoid infinite blocking connect(): use non-blocking connect with WaitSelect.
+     * Roadshow/bsdsocket uses IoctlSocket(FIONBIO).
+     */
+    one = 1;
+    IoctlSocket(sock, FIONBIO, (char *)&one);
     result = connect(sock, (struct sockaddr *)&sad, sizeof(sad));
-    if (result != 0) {
+    if (result == 0) {
+        one = 0;
+        IoctlSocket(sock, FIONBIO, (char *)&one);
+        return 0;
+    }
+    if (errno != EINPROGRESS && errno != EWOULDBLOCK) {
+        one = 0;
+        IoctlSocket(sock, FIONBIO, (char *)&one);
+        return ERROR_HTTP_CONNECT_FAILED;
+    }
+    FD_ZERO(&wfds);
+    FD_SET((int)sock, &wfds);
+    nfds = sock + 1;
+    if (timeout_secs == 0) {
+        timeout_secs = 60;
+    }
+    tv.tv_sec = (long)timeout_secs;
+    tv.tv_usec = 0;
+    rc = WaitSelect((int)nfds, NULL, &wfds, NULL, &tv, NULL);
+    if (rc <= 0) {
+        one = 0;
+        IoctlSocket(sock, FIONBIO, (char *)&one);
+        return ERROR_HTTP_CONNECT_TIMEOUT;
+    }
+    soerr = 0;
+    soerrlen = (LONG)sizeof(soerr);
+    getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&soerr, &soerrlen);
+    one = 0;
+    IoctlSocket(sock, FIONBIO, (char *)&one);
+    if (soerr != 0) {
         return ERROR_HTTP_CONNECT_FAILED;
     }
     return 0;
@@ -166,7 +209,7 @@ ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
     if (sock < 0) {
         return ERROR_HTTP_CONNECT_FAILED;
     }
-    rc = ht_tcp_connect(sock, hent, port);
+    rc = ht_tcp_connect(sock, hent, port, timeout_secs);
     if (rc != 0) {
         CloseSocket(sock);
         return rc;
