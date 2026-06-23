@@ -234,7 +234,7 @@ VOID ht_transport_global_shutdown(struct AmiHttpBase *base);
 LONG ht_transport_task_ssl_ensure(struct AmiHttpBase *base);
 VOID ht_transport_task_ssl_release(struct AmiHttpBase *base);
 LONG ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
-    STRPTR host, ULONG port, BOOL ssl, ULONG timeout_secs);
+    STRPTR host, ULONG port, BOOL ssl, ULONG timeout_secs, ULONG ssl_verify);
 VOID ht_transport_disconnect(struct AmiHttpBase *base, struct HtConnection *conn);
 LONG ht_transport_send(struct AmiHttpBase *base, struct HtConnection *conn,
     APTR data, ULONG len);
@@ -245,7 +245,8 @@ BOOL ht_transport_conn_idle(struct AmiHttpBase *base, struct HtConnection *conn)
 /* ht_ssl.c */
 struct HtSsl *ht_ssl_create(STRPTR hostname);
 VOID ht_ssl_destroy(struct HtSsl *s);
-LONG ht_ssl_attach_socket(struct HtSsl *s, LONG sock, STRPTR hostname);
+LONG ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s,
+    LONG sock, STRPTR hostname, ULONG verify_mode);
 LONG ht_ssl_send(struct HtSsl *s, APTR data, ULONG len);
 LONG ht_ssl_recv(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     APTR buf, ULONG len, ULONG timeout_secs);

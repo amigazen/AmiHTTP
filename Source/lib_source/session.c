@@ -36,7 +36,11 @@ ht_session_defaults(struct HttpSession *session)
     session->hs_ConnectTimeout = 0;
     session->hs_ReadTimeout = 0;
     session->hs_TotalTimeout = 0;
-    session->hs_SslVerify = HTSSL_VERIFY_PEER;
+    if (HttpBase != NULL) {
+        session->hs_SslVerify = HttpBase->ahb_SslVerify;
+    } else {
+        session->hs_SslVerify = HTSSL_VERIFY_PEER;
+    }
     session->hs_RefererPolicy = HTRP_ORIGIN;
     session->hs_TaskSerial = (ULONG)FindTask(NULL);
   /* When z.library is present, negotiate gzip/deflate by default. */

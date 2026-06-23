@@ -34,6 +34,8 @@ extern struct Library *SocketBase;
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
+#include <openssl/x509v3.h>
+#include <openssl/x509_vfy.h>
 #include <openssl/bio.h>
 #include <openssl/bn.h>
 
@@ -431,6 +433,83 @@ ht_ssl_peer_cert_clear(struct HtSsl *s)
     ht_ssl_peer_cert_free(s);
 }
 
+/*
+ * Map HTSSL_VERIFY_* to OpenSSL SSL_CTX_set_verify flags and load the
+ * AmiSSL default CA store when peer verification is requested.
+ */
+static VOID
+ht_ssl_configure_ctx(SSL_CTX *ctx, ULONG verify_mode)
+{
+    int verify_flags;
+
+    if (ctx == NULL) {
+        return;
+    }
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    if (verify_mode == HTSSL_VERIFY_NONE) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
+        return;
+    }
+    SSL_CTX_set_default_verify_paths(ctx);
+    verify_flags = SSL_VERIFY_PEER;
+    if (verify_mode == HTSSL_VERIFY_PEER_STRICT) {
+        verify_flags |= SSL_VERIFY_FAIL_IF_NO_PEER_CERT;
+    }
+    SSL_CTX_set_verify(ctx, verify_flags, NULL);
+}
+
+/*
+ * RFC 6125 hostname check against peer certificate (SAN then CN).
+ * Uses AmiSSL/OpenSSL X509_check_host(); returns TRUE on match.
+ */
+static BOOL
+ht_ssl_check_hostname(X509 *cert, STRPTR hostname)
+{
+    int rc;
+
+    if (cert == NULL || hostname == NULL || hostname[0] == '\0') {
+        return FALSE;
+    }
+    rc = X509_check_host(cert, (const char *)hostname, 0, 0, NULL);
+    return (BOOL)(rc == 1);
+}
+
+/*
+ * After SSL_connect, enforce HTSA_SSL_VERIFY / HTBT_SSL_VERIFY policy:
+ * chain result from SSL_get_verify_result and hostname match.
+ */
+static LONG
+ht_ssl_verify_peer(struct HtSsl *s, ULONG verify_mode)
+{
+    LONG vr;
+    X509 *cert;
+    BOOL host_ok;
+
+    if (s == NULL || s->hs_Ssl == NULL || verify_mode == HTSSL_VERIFY_NONE) {
+        return 0;
+    }
+    vr = (LONG)SSL_get_verify_result(s->hs_Ssl);
+    s->hs_CertVerifyResult = vr;
+    if (vr != X509_V_OK) {
+        return ERROR_HTTP_SSL_VERIFY;
+    }
+    cert = SSL_get_peer_certificate(s->hs_Ssl);
+    if (cert == NULL) {
+        s->hs_CertVerifyResult = X509_V_ERR_UNSPECIFIED;
+        return ERROR_HTTP_SSL_VERIFY;
+    }
+    if (s->hs_Hostname != NULL) {
+        host_ok = ht_ssl_check_hostname(cert, s->hs_Hostname);
+        if (!host_ok) {
+            s->hs_CertVerifyResult = X509_V_ERR_HOSTNAME_MISMATCH;
+            X509_free(cert);
+            return ERROR_HTTP_SSL_VERIFY;
+        }
+    }
+    X509_free(cert);
+    return 0;
+}
+
 struct HtSsl *
 ht_ssl_create(STRPTR hostname)
 {
@@ -468,10 +547,17 @@ ht_ssl_destroy(struct HtSsl *s)
 }
 
 LONG
-ht_ssl_attach_socket(struct HtSsl *s, LONG sock, STRPTR hostname)
+ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
+    STRPTR hostname, ULONG verify_mode)
 {
+    LONG rc;
+    LONG vr;
+
     if (s == NULL || sock < 0) {
         return ERROR_HTTP_INVALID_HANDLE;
+    }
+    if (base != NULL) {
+        ht_sync_proto_bases(base);
     }
     s->hs_Sock = sock;
     if (hostname != NULL) {
@@ -480,22 +566,41 @@ ht_ssl_attach_socket(struct HtSsl *s, LONG sock, STRPTR hostname)
         }
         s->hs_Hostname = ht_strdup(hostname);
     }
+    if (verify_mode > HTSSL_VERIFY_PEER_STRICT) {
+        verify_mode = HTSSL_VERIFY_PEER;
+    }
     s->hs_Ctx = SSL_CTX_new(TLS_client_method());
     if (s->hs_Ctx == NULL) {
         return ERROR_HTTP_SSL_HANDSHAKE;
     }
+    ht_ssl_configure_ctx(s->hs_Ctx, verify_mode);
     s->hs_Ssl = SSL_new(s->hs_Ctx);
     if (s->hs_Ssl == NULL) {
         return ERROR_HTTP_SSL_HANDSHAKE;
     }
+    /*
+     * SNI: tell the server which name we are connecting to (required for
+     * many virtual-hosted HTTPS sites).
+     */
     if (s->hs_Hostname != NULL) {
         SSL_set_tlsext_host_name(s->hs_Ssl, (const char *)s->hs_Hostname);
     }
     SSL_set_fd(s->hs_Ssl, (int)sock);
     if (SSL_connect(s->hs_Ssl) <= 0) {
+        if (verify_mode != HTSSL_VERIFY_NONE) {
+            vr = (LONG)SSL_get_verify_result(s->hs_Ssl);
+            if (vr != X509_V_OK) {
+                ht_ssl_capture_peer_cert(s);
+                return ERROR_HTTP_SSL_VERIFY;
+            }
+        }
         return ERROR_HTTP_SSL_HANDSHAKE;
     }
     ht_ssl_capture_peer_cert(s);
+    rc = ht_ssl_verify_peer(s, verify_mode);
+    if (rc != 0) {
+        return rc;
+    }
     return 0;
 }
 

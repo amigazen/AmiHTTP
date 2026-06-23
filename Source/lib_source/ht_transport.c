@@ -172,7 +172,7 @@ ht_tcp_connect(LONG sock, struct hostent *hent, ULONG port, ULONG timeout_secs)
 
 LONG
 ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
-    STRPTR host, ULONG port, BOOL ssl, ULONG timeout_secs)
+    STRPTR host, ULONG port, BOOL ssl, ULONG timeout_secs, ULONG ssl_verify)
 {
     struct hostent he;
     struct hostent *hent;
@@ -234,7 +234,7 @@ ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
             ht_transport_disconnect(base, conn);
             return ERROR_HTTP_OUT_OF_MEMORY;
         }
-        rc = ht_ssl_attach_socket(conn->hc_SslCtx, sock, host);
+        rc = ht_ssl_attach_socket(base, conn->hc_SslCtx, sock, host, ssl_verify);
         if (rc != 0) {
             ht_transport_disconnect(base, conn);
             return rc;

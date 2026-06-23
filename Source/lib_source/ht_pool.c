@@ -253,10 +253,10 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
     htDbgPut("ht_pool_acquire connect");
     if (session->hs_ConnectTimeout == 0) {
         rc = ht_transport_connect(base, conn, host, port, ssl,
-            base->ahb_DefaultTimeout);
+            base->ahb_DefaultTimeout, session->hs_SslVerify);
     } else {
         rc = ht_transport_connect(base, conn, host, port, ssl,
-            session->hs_ConnectTimeout);
+            session->hs_ConnectTimeout, session->hs_SslVerify);
     }
     if (rc != 0) {
         ht_set_error(rc);
