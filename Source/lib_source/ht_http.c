@@ -17,6 +17,9 @@
 
 #include <proto/exec.h>
 #include <proto/alib.h>
+#include <proto/z.h>
+
+#include <libraries/z.h>
 
 #include <amihttp/amihttpbase.h>
 #include <libraries/amihttp.h>
@@ -24,6 +27,7 @@
 #include "private/ht_internal.h"
 #include "private/ht_debug.h"
 #include "private/ht_hooks.h"
+#include "private/ht_zlib.h"
 
 #define HT_MAX_RESP_HEADERS 128
 
@@ -356,15 +360,10 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
     if (txn->ht_Session != NULL && txn->ht_Session->hs_AcceptEncoding != NULL &&
         txn->ht_Session->hs_AcceptEncoding[0] != '\0') {
         /*
-         * Only advertise encodings we can actually decode.
-         * For now, gzip/deflate require a valid open z.library handle.
+         * Only advertise encodings z.library can decode (session may set
+         * HTSA_ACCEPT_ENCODING; NewHttpSession defaults when z is open).
          */
-        if (HttpBase != NULL && HttpBase->ahb_ZDecodeReady) {
-            if (HttpBase->ahb_ZBase == NULL) {
-                HttpBase->ahb_ZBase = OpenLibrary((STRPTR)"z.library", 0);
-            }
-        }
-        if (HttpBase != NULL && HttpBase->ahb_ZDecodeReady && HttpBase->ahb_ZBase != NULL) {
+        if (HttpBase != NULL && ht_zlib_ensure(HttpBase)) {
             sprintf((char *)line, "Accept-Encoding: %s\r\n",
                 txn->ht_Session->hs_AcceptEncoding);
             strcat((char *)buf, line);
@@ -580,10 +579,14 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
         txn->ht_ContentLength = -1;
     }
     ce_val = ht_header_value(txn, (STRPTR)"Content-Encoding");
-    if (ce_val != NULL &&
-        (strstr(ce_val, "gzip") != NULL || strstr(ce_val, "deflate") != NULL)) {
-        /* Decompression via z.library is not wired yet. */
-        txn->ht_Flags |= HTF_GZIP;
+    if (ce_val != NULL && HttpBase != NULL && ht_zlib_ensure(HttpBase)) {
+        if (strstr(ce_val, "gzip") != NULL) {
+            txn->ht_Flags |= HTF_GZIP;
+            txn->ht_ZWindowBits = 15L + 16L;
+        } else if (strstr(ce_val, "deflate") != NULL) {
+            txn->ht_Flags |= HTF_GZIP;
+            txn->ht_ZWindowBits = 15L + 32L;
+        }
     }
     loc_val = ht_header_value(txn, (STRPTR)"Location");
     if (loc_val != NULL) {
@@ -1103,6 +1106,7 @@ ht_http_body_finish(struct AmiHttpBase *base, struct HttpTransaction *txn)
     if (txn == NULL) {
         return;
     }
+    ht_zlib_inflate_end(txn);
     if (txn->ht_Conn != NULL) {
         /*
          * discard any buffered bytes so they cannot
@@ -1119,6 +1123,250 @@ ht_http_body_finish(struct AmiHttpBase *base, struct HttpTransaction *txn)
         txn->ht_Conn = NULL;
     }
     txn->ht_Flags |= HTF_BODY_DONE;
+}
+
+/*
+ * Read compressed (wire) body bytes for inflate — tracks ht_WireReceived,
+ * not ht_BytesReceived (decoded octets).
+ */
+static LONG
+ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
+    UBYTE *buf, ULONG buflen)
+{
+    struct HtConnection *conn;
+    ULONG timeout;
+    ULONG copied;
+    ULONG avail;
+    ULONG take;
+    ULONG chunk_size;
+    ULONG blocklength;
+    ULONG copy;
+    BOOL final_chunk;
+    BOOL done_after_send;
+    LONG remaining;
+    LONG rc;
+
+    if (txn == NULL || buf == NULL || buflen == 0) {
+        return 0;
+    }
+    conn = txn->ht_Conn;
+    if (conn == NULL) {
+        return -1;
+    }
+    timeout = txn->ht_Session ? txn->ht_Session->hs_ReadTimeout : 0;
+    if (timeout == 0 && HttpBase != NULL) {
+        timeout = HttpBase->ahb_DefaultTimeout;
+    }
+
+    if (txn->ht_Flags & HTF_CHUNKED) {
+        copied = 0;
+        while (copied < buflen) {
+            if (txn->ht_ChunkRemain > 0) {
+                avail = ht_chunk_avail(conn);
+                if (avail == 0) {
+                    if (!ht_conn_readblock(base, conn, timeout)) {
+                        return (LONG)copied;
+                    }
+                    avail = ht_chunk_avail(conn);
+                }
+                take = txn->ht_ChunkRemain;
+                if (take > avail) {
+                    take = avail;
+                }
+                if (take > buflen - copied) {
+                    take = buflen - copied;
+                }
+                if (take > 0) {
+                    CopyMem(conn->hc_IoBuf + conn->hc_IoPos, buf + copied, take);
+                    conn->hc_IoPos += take;
+                    txn->ht_ChunkRemain -= take;
+                    txn->ht_WireReceived += take;
+                    copied += take;
+                }
+                if (txn->ht_ChunkRemain == 0) {
+                    rc = ht_chunk_skip_data_crlf(base, conn, timeout);
+                    if (rc != 0) {
+                        return (LONG)copied;
+                    }
+                }
+                continue;
+            }
+            rc = ht_chunk_read_size(conn, &chunk_size, &final_chunk);
+            while (rc == ERROR_HTTP_READ_TIMEOUT) {
+                if (!ht_conn_readblock(base, conn, timeout)) {
+                    return (LONG)copied;
+                }
+                rc = ht_chunk_read_size(conn, &chunk_size, &final_chunk);
+            }
+            if (rc != 0) {
+                return (LONG)copied;
+            }
+            if (final_chunk) {
+                txn->ht_Flags &= ~HTF_CHUNKED;
+                rc = ht_chunk_consume_trailers(base, conn, timeout);
+                if (rc != 0) {
+                    return (LONG)copied;
+                }
+                return (LONG)copied;
+            }
+            txn->ht_ChunkRemain = chunk_size;
+        }
+        return (LONG)copied;
+    }
+
+    blocklength = conn->hc_IoLen - conn->hc_IoPos;
+    if (blocklength == 0) {
+        if (txn->ht_ContentLength > 0 &&
+            (LONG)txn->ht_WireReceived >= txn->ht_ContentLength) {
+            return 0;
+        }
+        if (!ht_conn_readblock(base, conn, timeout)) {
+            if (txn->ht_ContentLength < 0) {
+                return 0;
+            }
+            if (txn->ht_ContentLength > 0 &&
+                (LONG)txn->ht_WireReceived < txn->ht_ContentLength) {
+                return -1;
+            }
+            return 0;
+        }
+        blocklength = conn->hc_IoLen - conn->hc_IoPos;
+        if (blocklength == 0) {
+            return 0;
+        }
+    }
+
+    copy = blocklength;
+    done_after_send = FALSE;
+    if (txn->ht_ContentLength > 0) {
+        remaining = txn->ht_ContentLength - (LONG)txn->ht_WireReceived;
+        if (remaining <= 0) {
+            return 0;
+        }
+        if (copy > (ULONG)remaining) {
+            copy = (ULONG)remaining;
+            done_after_send = TRUE;
+        } else if (copy == (ULONG)remaining) {
+            done_after_send = TRUE;
+        }
+    }
+    if (copy > buflen) {
+        copy = buflen;
+    }
+    if (copy == 0) {
+        return 0;
+    }
+
+    CopyMem(conn->hc_IoBuf + conn->hc_IoPos, buf, copy);
+    conn->hc_IoPos += copy;
+    txn->ht_WireReceived += copy;
+    if (done_after_send) {
+        (void)done_after_send;
+    }
+    return (LONG)copy;
+}
+
+/*
+ * Decode gzip/deflate Content-Encoding into the caller buffer via z.library.
+ */
+static LONG
+ht_http_read_body_gzip(struct AmiHttpBase *base, struct HttpTransaction *txn,
+    APTR dest, ULONG buflen)
+{
+    UBYTE inbuf[HT_GZIP_WIRE_CHUNK];
+    UBYTE *out;
+    ULONG copied;
+    ULONG produced;
+    ULONG take;
+    LONG rc;
+    LONG wire;
+    LONG flush;
+
+    out = (UBYTE *)dest;
+    if (txn->ht_ZWindowBits == 0) {
+        txn->ht_ZWindowBits = 15L + 32L;
+    }
+    rc = ht_zlib_inflate_begin(txn, txn->ht_ZWindowBits);
+    if (rc != 0) {
+        ht_set_txn_error(txn, rc);
+        return 0;
+    }
+
+    copied = 0;
+    while (copied < buflen) {
+        if (txn->ht_DecodePos < txn->ht_DecodeLen) {
+            take = txn->ht_DecodeLen - txn->ht_DecodePos;
+            if (take > buflen - copied) {
+                take = buflen - copied;
+            }
+            CopyMem(txn->ht_DecodeBuf + txn->ht_DecodePos, out + copied, take);
+            txn->ht_DecodePos += take;
+            txn->ht_BytesReceived += take;
+            ht_hook_body_chunk(txn, out + copied, take);
+            copied += take;
+            continue;
+        }
+
+        wire = 0;
+        flush = Z_NO_FLUSH;
+        if (txn->ht_ZStream.avail_in == 0 && !txn->ht_ZFinishing) {
+            wire = ht_http_read_compressed(base, txn, inbuf, HT_GZIP_WIRE_CHUNK);
+            if (wire < 0) {
+                ht_set_txn_error(txn, ERROR_HTTP_READ_FAILED);
+                ht_zlib_inflate_end(txn);
+                return (LONG)copied;
+            }
+            if (wire == 0) {
+                txn->ht_ZFinishing = TRUE;
+                flush = Z_FINISH;
+            } else {
+                txn->ht_ZStream.next_in = inbuf;
+                txn->ht_ZStream.avail_in = (ULONG)wire;
+            }
+        } else if (txn->ht_ZFinishing) {
+            flush = Z_FINISH;
+        }
+
+        txn->ht_ZStream.next_out = out + copied;
+        txn->ht_ZStream.avail_out = buflen - copied;
+        rc = Inflate(&txn->ht_ZStream, flush);
+        produced = buflen - copied - txn->ht_ZStream.avail_out;
+        if (produced > 0) {
+            ht_hook_body_chunk(txn, out + copied, produced);
+            txn->ht_BytesReceived += produced;
+            copied += produced;
+        }
+
+        if (rc == Z_STREAM_END) {
+            ht_zlib_inflate_end(txn);
+            ht_http_body_finish(base, txn);
+            ht_set_txn_error(txn, 0);
+            return (LONG)copied;
+        }
+        if (rc == Z_BUF_ERROR && txn->ht_ZFinishing) {
+            if (produced > 0) {
+                continue;
+            }
+            if (copied > 0) {
+                ht_set_txn_error(txn, 0);
+                return (LONG)copied;
+            }
+        }
+        if (rc != Z_OK) {
+            ht_set_txn_error(txn, ERROR_HTTP_PROTOCOL);
+            ht_zlib_inflate_end(txn);
+            return (LONG)copied;
+        }
+        if (produced == 0 && wire == 0 && !txn->ht_ZFinishing) {
+            ht_zlib_inflate_end(txn);
+            ht_http_body_finish(base, txn);
+            ht_set_txn_error(txn, 0);
+            return (LONG)copied;
+        }
+    }
+
+    ht_set_txn_error(txn, 0);
+    return (LONG)copied;
 }
 
 /*
@@ -1159,8 +1407,17 @@ ht_http_read_body(struct AmiHttpBase *base, struct HttpTransaction *txn,
         return 0;
     }
     if (txn->ht_Flags & HTF_GZIP) {
-        ht_set_txn_error(txn, ERROR_HTTP_NOT_IMPLEMENTED);
-        return 0;
+        if (dest == NULL || buflen == 0) {
+            return 0;
+        }
+        if (buflen > HT_IOBUF_SIZE) {
+            buflen = HT_IOBUF_SIZE;
+        }
+        if (txn->ht_Conn == NULL) {
+            ht_set_txn_error(txn, ERROR_HTTP_PROTOCOL);
+            return 0;
+        }
+        return ht_http_read_body_gzip(base, txn, dest, buflen);
     }
     if (dest == NULL || buflen == 0) {
         return 0;

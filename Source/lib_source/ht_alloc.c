@@ -22,7 +22,8 @@ VOID
 ht_free(APTR p)
 {
     if (p != NULL) {
-        FreeMem(p, -1);
+        /* AmigaOS: byteSize 0 releases the whole AllocMem block. */
+        FreeMem(p, 0);
     }
 }
 

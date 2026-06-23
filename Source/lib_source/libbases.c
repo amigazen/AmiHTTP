@@ -16,6 +16,7 @@
 extern struct DosLibrary *DOSBase;
 
 struct Library *UtilityBase;
+struct Library *ZBase;
 struct Library *SocketBase;
 struct Library *AmiSSLMasterBase;
 struct Library *AmiSSLBase;
@@ -35,6 +36,7 @@ ht_sync_proto_bases(struct AmiHttpBase *base)
         return;
     }
     UtilityBase = base->ahb_UtilityBase;
+    ZBase = base->ahb_ZBase;
     SocketBase = base->ahb_SocketBase;
     DOSBase = (struct DosLibrary *)base->ahb_DOSBase;
     AmiSSLMasterBase = base->ahb_AmiSSLMasterBase;

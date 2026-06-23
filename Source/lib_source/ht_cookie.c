@@ -53,6 +53,40 @@ ht_str_ieq(STRPTR a, STRPTR b)
     return (*a == '\0' && *b == '\0');
 }
 
+/*
+ * Case-insensitive compare of alen bytes at a to NUL-terminated b.
+ * Used for Set-Cookie attribute names (Domain, Path, Secure) where the
+ * wire form is not NUL-terminated between '=' and ';'.
+ */
+static int
+ht_str_ieq_len(STRPTR a, LONG alen, STRPTR b)
+{
+    char ca;
+    char cb;
+    LONG i;
+
+    if (a == NULL || b == NULL || alen < 0) {
+        return 0;
+    }
+    for (i = 0; i < alen; i++) {
+        ca = a[i];
+        cb = b[i];
+        if (cb == '\0') {
+            return 0;
+        }
+        if (ca >= 'A' && ca <= 'Z') {
+            ca = (char)(ca + ('a' - 'A'));
+        }
+        if (cb >= 'A' && cb <= 'Z') {
+            cb = (char)(cb + ('a' - 'A'));
+        }
+        if (ca != cb) {
+            return 0;
+        }
+    }
+    return (b[alen] == '\0');
+}
+
 static VOID
 ht_cookie_free_one(struct HtCookie *ck)
 {
@@ -147,6 +181,10 @@ ht_cookie_path_match(STRPTR ckpath, STRPTR reqpath)
     }
     len = ht_strlen(ckpath);
     orglen = ht_strlen(reqpath);
+    /* RFC 6265: cookie-path "/" matches all request paths on the host */
+    if (len == 1 && ckpath[0] == '/') {
+        return (BOOL)(orglen > 0 && reqpath[0] == '/');
+    }
     if (orglen < len) {
         return FALSE;
     }
@@ -209,7 +247,11 @@ ht_cookie_jar_trim(struct HttpCookieJar *jar, ULONG max_count)
     struct HtCookie *next;
     ULONG count;
 
-    if (jar == NULL || max_count == 0) {
+    if (jar == NULL) {
+        return;
+    }
+    if (max_count == 0) {
+        ht_cookie_jar_clear(jar);
         return;
     }
     ObtainSemaphore(&jar->hj_Sema);
@@ -246,6 +288,7 @@ ht_cookie_store_line(struct HttpCookieJar *jar, STRPTR url, STRPTR spec,
     STRPTR req_host;
     STRPTR req_path;
     LONG rc;
+    LONG attr_len;
 
     if (jar == NULL || spec == NULL || spec[0] == '\0') {
         return ERROR_HTTP_INVALID_HANDLE;
@@ -306,18 +349,19 @@ ht_cookie_store_line(struct HttpCookieJar *jar, STRPTR url, STRPTR spec,
             attr_end++;
         }
         if (*attr_end == '=') {
+            attr_len = (LONG)(attr_end - attr);
             p = attr_end + 1;
-            if (ht_str_ieq(attr, (STRPTR)"Domain")) {
+            if (ht_str_ieq_len(attr, attr_len, (STRPTR)"Domain")) {
                 if (ck->hc_Domain) {
                     ht_free(ck->hc_Domain);
                 }
                 ck->hc_Domain = ht_cookie_attr_value(p, &p);
-            } else if (ht_str_ieq(attr, (STRPTR)"Path")) {
+            } else if (ht_str_ieq_len(attr, attr_len, (STRPTR)"Path")) {
                 if (ck->hc_Path) {
                     ht_free(ck->hc_Path);
                 }
                 ck->hc_Path = ht_cookie_attr_value(p, &p);
-            } else if (ht_str_ieq(attr, (STRPTR)"Secure")) {
+            } else if (ht_str_ieq_len(attr, attr_len, (STRPTR)"Secure")) {
                 ck->hc_Secure = TRUE;
                 while (*p != '\0' && *p != ';') {
                     p++;
@@ -328,7 +372,8 @@ ht_cookie_store_line(struct HttpCookieJar *jar, STRPTR url, STRPTR spec,
                 }
             }
         } else {
-            if (ht_str_ieq(attr, (STRPTR)"Secure")) {
+            attr_len = (LONG)(attr_end - attr);
+            if (ht_str_ieq_len(attr, attr_len, (STRPTR)"Secure")) {
                 ck->hc_Secure = TRUE;
             }
             p = attr_end;

@@ -25,6 +25,7 @@
 #include "private/ht_debug.h"
 #include "private/ht_internal.h"
 #include "private/ht_hooks.h"
+#include "private/ht_zlib.h"
 
 extern struct AmiHttpBase *HttpBase;
 
@@ -151,6 +152,7 @@ ht_txn_free_fields(struct HttpTransaction *txn)
     if (txn->ht_DecodeBuf) {
         ht_free(txn->ht_DecodeBuf);
     }
+    ht_zlib_inflate_end(txn);
     ht_txn_free_peer_cert(txn);
 }
 
@@ -191,6 +193,10 @@ ht_txn_clear_resp_state(struct HttpTransaction *txn)
     txn->ht_DecodeLen = 0;
     txn->ht_DecodePos = 0;
     txn->ht_DecodeCap = 0;
+    ht_zlib_inflate_end(txn);
+    txn->ht_ZFinishing = FALSE;
+    txn->ht_ZWindowBits = 0;
+    txn->ht_WireReceived = 0;
     txn->ht_ChunkRemain = 0;
     txn->ht_BytesReceived = 0;
     txn->ht_ContentLength = -1;
@@ -804,6 +810,13 @@ __ASM__ __SAVE_DS__ HttpTransactionGetContentLength(
     __REG__(a0, struct HttpTransaction *txn))
 {
     if (!ht_check_handle(txn ? txn->ht_Magic : 0, HT_MAGIC_TXN)) {
+        return -1;
+    }
+    /*
+     * Content-Length on the wire is the compressed octet count when
+     * Content-Encoding is active; decoded size is unknown until ReadBody.
+     */
+    if (txn->ht_Flags & HTF_GZIP) {
         return -1;
     }
     return txn->ht_ContentLength;

@@ -37,7 +37,7 @@ extern struct ExecBase *SysBase;
 extern struct AmiHttpBase *HttpBase;
 extern struct DosLibrary *DOSBase;
 extern struct Library *UtilityBase;
-static struct Library *ZBase;
+extern struct Library *ZBase;
 
 ULONG __SAVE_DS__
 L_OpenLibs(struct AmiHttpBase *base)
@@ -84,6 +84,17 @@ L_OpenLibs(struct AmiHttpBase *base)
     if (base != NULL) {
         base->ahb_DOSBase = (struct Library *)DOSBase;
     }
+
+    if (base != NULL) {
+        base->ahb_ZBase = OpenLibrary((STRPTR)"z.library", 2);
+        if (base->ahb_ZBase != NULL) {
+            base->ahb_ZDecodeReady = TRUE;
+            ZBase = base->ahb_ZBase;
+        } else {
+            base->ahb_ZDecodeReady = FALSE;
+        }
+    }
+
     ht_sync_proto_bases(base);
     htDbgPut("L_OpenLibs: dos.library ok");
     htDbgPut("L_OpenLibs: success");

@@ -10,6 +10,7 @@ FROM     StartUp.o
          ht_url.o
          ht_auth.o
          ht_cookie.o
+         ht_zlib.o
          ht_http.o
          ht_async.o
          ht_hooks.o

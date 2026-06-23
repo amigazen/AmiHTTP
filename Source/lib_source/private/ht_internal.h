@@ -23,6 +23,9 @@
 #ifndef LIBRARIES_AMIHTTP_H
 #include <libraries/amihttp.h>
 #endif
+#ifndef LIBRARIES_Z_H
+#include <libraries/z.h>
+#endif
 
 #define HT_MAGIC_SESSION    0x48545353UL
 #define HT_MAGIC_TXN        0x48545458UL
@@ -32,6 +35,8 @@
 #define HT_MAGIC_URL        0x48545552UL
 
 #define HT_IOBUF_SIZE       8192
+/* Wire read chunk for gzip inflate — keep off the client stack (see ht_http.c). */
+#define HT_GZIP_WIRE_CHUNK  1024
 #define HT_REQBUF_INIT      4096
 #define HT_REQBUF_MAX       262144
 #define HT_POOL_TIMEOUT     15
@@ -175,6 +180,11 @@ struct HttpTransaction
     struct Hook         *ht_Hooks[8];
     struct HttpTiming   ht_Timing;
     struct Http_cc_accum ht_CcAccum;
+    z_stream            ht_ZStream;
+    BOOL                ht_ZInited;
+    BOOL                ht_ZFinishing;
+    LONG                ht_ZWindowBits;
+    ULONG               ht_WireReceived;
     UBYTE              *ht_DecodeBuf;
     ULONG               ht_DecodeLen;
     ULONG               ht_DecodePos;

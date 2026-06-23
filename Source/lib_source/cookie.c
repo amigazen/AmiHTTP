@@ -77,7 +77,7 @@ __ASM__ __SAVE_DS__ FlushHttpCookieJar(
     __REG__(a0, struct HttpCookieJar *jar),
     __REG__(d0, ULONG max_count))
 {
-    if (!ht_check_handle(jar ? jar->hj_Magic : 0, HT_MAGIC_JAR)) {
+    if (jar == NULL || jar->hj_Magic != HT_MAGIC_JAR) {
         return;
     }
     if (max_count == 0) {

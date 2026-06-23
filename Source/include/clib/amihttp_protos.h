@@ -3,10 +3,6 @@
  * Copyright 2026 amigazen project
  *
  * amihttp_protos.h - Plain C prototypes for amihttp.library LVO functions
- *
- * Order MUST match SDK/SFD/amihttp_lib.sfd and StartUp.c FuncTab[] exactly.
- * Pragma libcall offsets are derived from this order (bias 30, +6 per slot).
- * Do not regroup by API tier; regenerate from SFD when the public API changes.
  */
 
 #ifndef CLIB_AMIHTTP_PROTOS_H

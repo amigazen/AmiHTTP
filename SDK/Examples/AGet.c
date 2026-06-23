@@ -18,7 +18,7 @@
  *   QUIET/S  - body (or TO file) only; stderr used for errors only
  *   HEADERS/S- request/response header dump on stderr (no API trace)
  *   VERBOSE/S- step-by-step amihttp API trace on stderr
- *   TEST/S   - VERBOSE plus Tier0/URL/cookie/Tier3 API smoke tests, then fetch
+ *   TEST/S   - offline amihttp API self-test (no network); URL optional
  */
 
 #define __USE_SYSBASE
@@ -40,7 +40,7 @@
 
 
 static const char version_tag[] = "\0$VER: AGet 1.0 (22.6.26)";
-static const char stack_cookie[] = "$STACK: 4096";
+static const char stack_cookie[] = "$STACK: 16384";
 
 #define AGET_TEMPLATE \
     "URL," \
@@ -82,10 +82,23 @@ static BOOL   ag_headers;
 static BOOL   ag_test_mode;
 static BOOL   ag_body_console;
 static LONG   ag_body_last_byte;
+static LONG   ag_test_fails;
 
 #define AG_EMPTY_STR    ((STRPTR)"")
+#define AG_TEST_URL     ((STRPTR)"http://example.com/test?a=1")
+#define AG_TEST_COOKIE  ((STRPTR)"test=value; Domain=example.com; Path=/test")
 
 static VOID ag_printf(STRPTR fmt, ...);
+static LONG ag_selftest(STRPTR url);
+static VOID ag_test_fail(STRPTR name, STRPTR detail);
+static VOID ag_test_expect_true(STRPTR label, LONG rv);
+static VOID ag_test_expect_false(STRPTR label, LONG rv);
+static VOID ag_test_expect_long(STRPTR label, LONG got, LONG want);
+static VOID ag_test_expect_nonnull(STRPTR label, APTR p);
+static VOID ag_test_expect_null(STRPTR label, APTR p);
+static VOID ag_test_expect_str(STRPTR label, STRPTR got, STRPTR want);
+static VOID ag_test_expect_substr(STRPTR label, STRPTR got, STRPTR needle);
+static VOID ag_test_expect_http_error(STRPTR label, LONG want);
 
 static VOID
 ag_flush_msg(void)
@@ -236,6 +249,98 @@ ag_free_str(STRPTR s)
 {
     if (s != NULL) {
         FreeMem(s, (ULONG)strlen((const char *)s) + 1);
+    }
+}
+
+static VOID
+ag_test_fail(STRPTR name, STRPTR detail)
+{
+    ag_test_fails++;
+    ag_printf("AGet: FAIL %s", name);
+    if (detail != NULL && detail[0] != '\0') {
+        ag_printf(": %s", detail);
+    }
+    ag_printf("\n");
+    ag_flush_msg();
+}
+
+static VOID
+ag_test_expect_true(STRPTR label, LONG rv)
+{
+    if (!rv) {
+        ag_test_fail(label, (STRPTR)"expected TRUE");
+    }
+}
+
+static VOID
+ag_test_expect_false(STRPTR label, LONG rv)
+{
+    if (rv) {
+        ag_test_fail(label, (STRPTR)"expected FALSE");
+    }
+}
+
+static VOID
+ag_test_expect_long(STRPTR label, LONG got, LONG want)
+{
+    char buf[64];
+
+    if (got != want) {
+        sprintf(buf, "got %ld want %ld", got, want);
+        ag_test_fail(label, (STRPTR)buf);
+    }
+}
+
+static VOID
+ag_test_expect_nonnull(STRPTR label, APTR p)
+{
+    if (p == NULL) {
+        ag_test_fail(label, (STRPTR)"expected non-NULL");
+    }
+}
+
+static VOID
+ag_test_expect_null(STRPTR label, APTR p)
+{
+    if (p != NULL) {
+        ag_test_fail(label, (STRPTR)"expected NULL");
+    }
+}
+
+static VOID
+ag_test_expect_str(STRPTR label, STRPTR got, STRPTR want)
+{
+    if (got == NULL || want == NULL) {
+        ag_test_fail(label, (STRPTR)"NULL string");
+        return;
+    }
+    if (strcmp((const char *)got, (const char *)want) != 0) {
+        ag_test_fail(label, got);
+    }
+}
+
+static VOID
+ag_test_expect_substr(STRPTR label, STRPTR got, STRPTR needle)
+{
+    if (got == NULL || needle == NULL) {
+        ag_test_fail(label, (STRPTR)"NULL string");
+        return;
+    }
+    if (strstr((const char *)got, (const char *)needle) == NULL) {
+        ag_test_fail(label, got);
+    }
+}
+
+static VOID
+ag_test_expect_http_error(STRPTR label, LONG want)
+{
+    char buf[64];
+    LONG code;
+
+    code = HttpError();
+    if (code != want) {
+        sprintf(buf, "HttpError()=%ld want %ld", code, want);
+        ag_test_fail(label, (STRPTR)buf);
     }
 }
 
@@ -481,92 +586,151 @@ ag_test_tier0(void)
     LONG code;
     char fbuf[128];
     LONG flen;
+    LONG rv;
 
     ag_step_log("Tier0: HttpError baseline");
     ag_log_errno("initial");
+    ag_test_expect_http_error("HttpError initial", 0);
 
     ag_step_log("Tier0: SetHttpError round-trip");
     prev = SetHttpError(ERROR_HTTP_PROTOCOL);
     ag_log_long("SetHttpError(PROTOCOL) prev", prev);
     code = HttpError();
     ag_log_long("HttpError after set", code);
+    ag_test_expect_long("SetHttpError round-trip", code, ERROR_HTTP_PROTOCOL);
     prev = SetHttpError(0);
     ag_log_long("SetHttpError(0) prev", prev);
+    ag_test_expect_http_error("SetHttpError clear", 0);
 
     ag_step_log("Tier0: HttpGetErrorString samples");
     ag_log_str("HttpGetErrorString(0)", HttpGetErrorString(0));
+    ag_test_expect_str("HttpGetErrorString(0)", HttpGetErrorString(0),
+        (STRPTR)"No error");
     ag_log_str("HttpGetErrorString(8713)",
         HttpGetErrorString(ERROR_HTTP_INVALID_HANDLE));
+    ag_test_expect_str("HttpGetErrorString(8713)",
+        HttpGetErrorString(ERROR_HTTP_INVALID_HANDLE),
+        (STRPTR)"Invalid handle");
 
     ag_step_log("Tier0: HttpFault formatting");
     flen = HttpFault(ERROR_HTTP_DNS_FAILED, (STRPTR)"lookup",
         (STRPTR)fbuf, (LONG)sizeof(fbuf));
     ag_printf("AGet:     HttpFault -> len=%ld \"%s\"\n", flen, fbuf);
-    ag_log_errno("after HttpFault");
+    if (flen <= 0) {
+        ag_test_fail("HttpFault length", (STRPTR)"len <= 0");
+    }
+    if (strstr(fbuf, "DNS") == NULL) {
+        ag_test_fail("HttpFault text", (STRPTR)fbuf);
+    }
+    ag_test_expect_http_error("after HttpFault", ERROR_HTTP_DNS_FAILED);
+    SetHttpError(0);
+
+    ag_step_log("Tier0: HttpBaseTags");
+    rv = HttpBaseTags(
+        HTBT_DEFAULT_USERAGENT, (ULONG)"AGet-selftest/1.0",
+        HTBT_DEFAULT_TIMEOUT,   (ULONG)60,
+        HTBT_MAX_IDLE_CONNECTIONS, (ULONG)2,
+        HTBT_IDLE_TIMEOUT,      (ULONG)30,
+        TAG_DONE);
+    ag_log_bool("HttpBaseTags", rv);
+    ag_test_expect_true("HttpBaseTags", rv);
+    ag_test_expect_http_error("after HttpBaseTags", 0);
 }
 
 static VOID
 ag_test_url_utils(STRPTR url)
 {
     struct ParsedUrl *pu;
+    struct ParsedUrl *bad;
     STRPTR rebuilt;
     STRPTR enc;
     STRPTR dec;
     STRPTR penc;
     STRPTR part;
+    STRPTR joined;
     struct List pairs;
     struct HttpQueryPair qp1;
     struct HttpQueryPair qp2;
     STRPTR qstr;
 
+    ag_step_log("URL: ParseHttpUrl invalid");
+    bad = ParseHttpUrl((STRPTR)"not-a-valid-url");
+    ag_log_ptr("ParseHttpUrl(bad)", "pu", bad);
+    ag_test_expect_null("ParseHttpUrl(invalid)", bad);
+
     ag_step_log("URL: ParseHttpUrl");
     pu = ParseHttpUrl(url);
     ag_log_ptr("ParseHttpUrl", "pu", pu);
-    ag_log_errno("after ParseHttpUrl");
+    ag_test_expect_nonnull("ParseHttpUrl", pu);
+    ag_test_expect_http_error("after ParseHttpUrl", 0);
     ag_log_parsed_url(pu);
 
     if (pu != NULL) {
         ag_step_log("URL: BuildHttpUrl round-trip");
         rebuilt = BuildHttpUrl(pu);
         ag_log_str("BuildHttpUrl", rebuilt);
+        ag_test_expect_nonnull("BuildHttpUrl", rebuilt);
         if (rebuilt != NULL) {
+            ag_test_expect_str("BuildHttpUrl round-trip", rebuilt, url);
             ag_free_str(rebuilt);
         }
 
         ag_step_log("URL: URI part helpers");
         part = HttpUriSchemePart(url);
         ag_log_str("HttpUriSchemePart", part);
+        ag_test_expect_str("HttpUriSchemePart", part, (STRPTR)"http");
         ag_free_str(part);
         part = HttpUriHostPart(url);
         ag_log_str("HttpUriHostPart", part);
+        ag_test_expect_str("HttpUriHostPart", part, (STRPTR)"example.com");
         ag_free_str(part);
         part = HttpUriAuthorityPart(url);
         ag_log_str("HttpUriAuthorityPart", part);
+        ag_test_expect_str("HttpUriAuthorityPart", part, (STRPTR)"example.com");
         ag_free_str(part);
         part = HttpUriPathPart(url);
         ag_log_str("HttpUriPathPart", part);
+        ag_test_expect_str("HttpUriPathPart", part, (STRPTR)"/test");
         ag_free_str(part);
         part = HttpUriFilePart(url);
         ag_log_str("HttpUriFilePart", part);
+        ag_test_expect_str("HttpUriFilePart", part, (STRPTR)"test");
         ag_free_str(part);
         part = HttpUriParentPart(url);
         ag_log_str("HttpUriParentPart", part);
+        ag_test_expect_str("HttpUriParentPart", part, (STRPTR)"/");
         ag_free_str(part);
         part = HttpUriQueryPart(url);
         ag_log_str("HttpUriQueryPart", part);
+        ag_test_expect_str("HttpUriQueryPart", part, (STRPTR)"a=1");
         ag_free_str(part);
+
+        ag_step_log("URL: HttpJoinUri");
+        joined = HttpJoinUri((STRPTR)"http://example.com/a/b", (STRPTR)"c");
+        ag_log_str("HttpJoinUri", joined);
+        ag_test_expect_nonnull("HttpJoinUri", joined);
+        if (joined != NULL) {
+            ag_free_str(joined);
+        }
 
         ag_step_log("URL: encode/decode helpers");
         enc = HttpUrlEncode((STRPTR)"hello world&foo=bar");
         ag_log_str("HttpUrlEncode", enc);
+        ag_test_expect_nonnull("HttpUrlEncode", enc);
         if (enc != NULL) {
+            ag_test_expect_str("HttpUrlEncode", enc,
+                (STRPTR)"hello%20world%26foo%3Dbar");
             dec = HttpUrlDecode(enc);
             ag_log_str("HttpUrlDecode", dec);
+            ag_test_expect_str("HttpUrlDecode round-trip", dec,
+                (STRPTR)"hello world&foo=bar");
             ag_free_str(dec);
             ag_free_str(enc);
         }
         penc = HttpPathEncode((STRPTR)"/a path/file.html");
         ag_log_str("HttpPathEncode", penc);
+        ag_test_expect_str("HttpPathEncode", penc,
+            (STRPTR)"%2Fa%20path%2Ffile.html");
         ag_free_str(penc);
 
         ag_step_log("URL: HttpBuildQueryString");
@@ -579,20 +743,297 @@ ag_test_url_utils(STRPTR url)
         AddTail(&pairs, &qp2.hqp_Node);
         qstr = HttpBuildQueryString(&pairs);
         ag_log_str("HttpBuildQueryString", qstr);
+        ag_test_expect_str("HttpBuildQueryString", qstr,
+            (STRPTR)"a=1&b=two%20%26%20more");
         ag_free_str(qstr);
 
         ag_step_log("URL: DisposeHttpUrl");
         DisposeHttpUrl(pu);
-        ag_log_errno("after DisposeHttpUrl");
+        ag_test_expect_http_error("after DisposeHttpUrl", 0);
     }
+}
+
+static VOID
+ag_test_cookies(struct HttpSession *session, STRPTR url)
+{
+    struct HttpCookieJar *jar;
+    STRPTR cstr;
+    LONG rv;
+
+    ag_step_log("Cookie: NewHttpCookieJar");
+    jar = NewHttpCookieJar();
+    ag_log_ptr("NewHttpCookieJar", "jar", jar);
+    ag_test_expect_nonnull("NewHttpCookieJar", jar);
+    if (jar == NULL) {
+        return;
+    }
+
+    ag_step_log("Cookie: SetHttpCookie");
+    rv = SetHttpCookie(jar, AG_TEST_COOKIE);
+    ag_log_bool("SetHttpCookie", rv);
+    ag_test_expect_true("SetHttpCookie", rv);
+
+    ag_step_log("Cookie: GetHttpCookieString");
+    cstr = GetHttpCookieString(jar, url);
+    ag_log_str("GetHttpCookieString", cstr);
+    ag_test_expect_nonnull("GetHttpCookieString", cstr);
+    if (cstr != NULL) {
+        ag_test_expect_substr("GetHttpCookieString value", cstr,
+            (STRPTR)"test=value");
+        ag_free_str(cstr);
+    }
+
+    ag_step_log("Cookie: SaveHttpCookieJar (not implemented)");
+    SetHttpError(0);
+    rv = SaveHttpCookieJar(jar, (STRPTR)"T:aget_cookies.txt");
+    ag_log_bool("SaveHttpCookieJar", rv);
+    ag_test_expect_false("SaveHttpCookieJar", rv);
+    ag_test_expect_http_error("SaveHttpCookieJar",
+        ERROR_HTTP_NOT_IMPLEMENTED);
+
+    ag_step_log("Cookie: LoadHttpCookieJar (not implemented)");
+    SetHttpError(0);
+    rv = LoadHttpCookieJar(jar, (STRPTR)"T:aget_cookies.txt");
+    ag_log_bool("LoadHttpCookieJar", rv);
+    ag_test_expect_false("LoadHttpCookieJar", rv);
+    ag_test_expect_http_error("LoadHttpCookieJar",
+        ERROR_HTTP_NOT_IMPLEMENTED);
+
+    ag_step_log("Cookie: FlushHttpCookieJar(0)");
+    SetHttpError(0);
+    FlushHttpCookieJar(jar, 0UL);
+    cstr = GetHttpCookieString(jar, url);
+    ag_log_str("GetHttpCookieString after flush", cstr);
+    if (cstr != NULL) {
+        ag_test_expect_str("FlushHttpCookieJar(0)", cstr, (STRPTR)"");
+        ag_free_str(cstr);
+    }
+
+    ag_step_log("Cookie: SetHttpCookie re-store");
+    rv = SetHttpCookie(jar, AG_TEST_COOKIE);
+    ag_test_expect_true("SetHttpCookie re-store", rv);
+
+    ag_step_log("Cookie: HttpSessionAttachCookieJar");
+    rv = HttpSessionAttachCookieJar(session, jar);
+    ag_log_bool("HttpSessionAttachCookieJar", rv);
+    ag_test_expect_true("HttpSessionAttachCookieJar", rv);
+
+    ag_step_log("Cookie: HttpSessionDetachCookieJar");
+    HttpSessionDetachCookieJar(session);
+
+    ag_step_log("Cookie: DisposeHttpCookieJar");
+    DisposeHttpCookieJar(jar);
+}
+
+static VOID
+ag_test_session(struct HttpSession *session)
+{
+    LONG rv;
+
+    ag_step_log("Tier1: SetHttpSessionAttrs");
+    rv = SetHttpSessionAttrs(
+        session,
+        HTSA_USERAGENT,        (ULONG)"AGet-selftest/1.0",
+        HTSA_FOLLOW_REDIRECTS, (ULONG)TRUE,
+        HTSA_MAX_REDIRECTS,    (ULONG)5,
+        HTSA_KEEPALIVE,        (ULONG)TRUE,
+        HTSA_CONNECT_TIMEOUT,  (ULONG)30,
+        HTSA_READ_TIMEOUT,     (ULONG)60,
+        HTSA_REFERER_POLICY,   (ULONG)HTRP_ORIGIN,
+        HTSA_SSL_VERIFY,       (ULONG)HTSSL_VERIFY_PEER,
+        TAG_DONE);
+    ag_log_bool("SetHttpSessionAttrs", rv);
+    ag_test_expect_true("SetHttpSessionAttrs", rv);
+    ag_test_expect_http_error("after SetHttpSessionAttrs", 0);
+
+    ag_step_log("Tier1: SetHttpSessionHook");
+    rv = SetHttpSessionHook(session, HTHK_PROGRESS, NULL);
+    ag_log_bool("SetHttpSessionHook", rv);
+    ag_test_expect_true("SetHttpSessionHook", rv);
+}
+
+static VOID
+ag_test_transaction(struct HttpSession *session, STRPTR url)
+{
+    struct HttpTransaction *txn;
+    struct HttpSslPeerCert cert;
+    struct HttpTiming timing;
+    struct List *rh;
+    LONG rv;
+    LONG status;
+    LONG clen;
+    ULONG received;
+    LONG last_err;
+    BOOL complete;
+    STRPTR sl;
+    STRPTR rhdr;
+
+    ag_step_log("Tier2: NewHttpTransaction");
+    txn = NewHttpTransaction(session);
+    ag_log_ptr("NewHttpTransaction", "txn", txn);
+    ag_test_expect_nonnull("NewHttpTransaction", txn);
+    if (txn == NULL) {
+        return;
+    }
+
+    ag_step_log("Tier2: SetHttpTransactionAttrs");
+    rv = SetHttpTransactionAttrs(
+        txn,
+        HTTA_URL,        (ULONG)url,
+        HTTA_METHOD,     (ULONG)"GET",
+        HTTA_USERAGENT,  (ULONG)"AGet-selftest/1.0",
+        HTTA_NO_CACHE,   (ULONG)TRUE,
+        TAG_DONE);
+    ag_log_bool("SetHttpTransactionAttrs", rv);
+    ag_test_expect_true("SetHttpTransactionAttrs", rv);
+
+    ag_step_log("Tier2: HttpTransactionAddHeader");
+    rv = HttpTransactionAddHeader(txn,
+        (STRPTR)"X-AGet-Test", (STRPTR)"1");
+    ag_log_bool("HttpTransactionAddHeader", rv);
+    ag_test_expect_true("HttpTransactionAddHeader", rv);
+    rv = HttpTransactionAddHeader(txn,
+        (STRPTR)"X-Second", (STRPTR)"two");
+    ag_test_expect_true("HttpTransactionAddHeader(2)", rv);
+
+    ag_step_log("Tier2: HttpTransactionClearHeaders");
+    HttpTransactionClearHeaders(txn);
+    ag_test_expect_http_error("after HttpTransactionClearHeaders", 0);
+
+    ag_step_log("Tier2: getters before Perform");
+    status = HttpTransactionGetStatusCode(txn);
+    ag_log_long("HttpTransactionGetStatusCode", status);
+    ag_test_expect_long("GetStatusCode pre-perform", status, 0);
+
+    sl = HttpTransactionGetStatusLine(txn);
+    ag_log_str("HttpTransactionGetStatusLine", sl);
+
+    rhdr = HttpTransactionRespHeader(txn, (STRPTR)"Content-Type");
+    ag_log_str("HttpTransactionRespHeader", rhdr);
+    ag_test_expect_null("RespHeader pre-perform", rhdr);
+
+    rh = HttpTransactionRespHeaders(txn);
+    ag_log_ptr("HttpTransactionRespHeaders", "list", rh);
+
+    clen = HttpTransactionGetContentLength(txn);
+    ag_log_long("HttpTransactionGetContentLength", clen);
+    ag_test_expect_long("GetContentLength pre-perform", clen, -1);
+
+    received = HttpTransactionGetBytesReceived(txn);
+    ag_log_long("HttpTransactionGetBytesReceived", (LONG)received);
+    ag_test_expect_long("GetBytesReceived pre-perform", (LONG)received, 0);
+
+    rv = HttpTransactionGetTiming(txn, &timing);
+    ag_log_bool("HttpTransactionGetTiming", rv);
+    ag_test_expect_true("GetTiming pre-perform", rv);
+
+    last_err = HttpTransactionGetLastError(txn);
+    ag_log_long("HttpTransactionGetLastError", last_err);
+    ag_test_expect_long("GetLastError pre-perform", last_err, 0);
+
+    complete = HttpTransactionIsComplete(txn);
+    ag_log_bool("HttpTransactionIsComplete", complete ? 1 : 0);
+    ag_test_expect_long("IsComplete pre-perform", (LONG)complete, 0);
+
+    ag_step_log("Tier2: GetPeerCert before HTTPS");
+    rv = HttpTransactionGetPeerCert(txn, &cert);
+    ag_log_bool("HttpTransactionGetPeerCert", rv);
+    ag_test_expect_false("GetPeerCert pre-perform", rv);
+    HttpPeerCertFree(&cert);
+
+    ag_step_log("Tier2: SetHttpTransactionHook");
+    rv = SetHttpTransactionHook(txn, HTHK_PROGRESS, NULL);
+    ag_log_bool("SetHttpTransactionHook", rv);
+    ag_test_expect_true("SetHttpTransactionHook", rv);
+
+    ag_step_log("Tier2: AbortHttpTransaction");
+    AbortHttpTransaction(txn);
+    ag_test_expect_http_error("after AbortHttpTransaction", 0);
+
+    ag_step_log("Tier2: DisposeHttpTransaction");
+    DisposeHttpTransaction(txn);
+}
+
+static VOID
+ag_test_tier3_offline(struct HttpSession *session)
+{
+    struct HttpConnection *conn;
+    LONG rv;
+    char linebuf[128];
+
+    ag_step_log("Tier3: OpenHttpConnection(NULL session)");
+    SetHttpError(0);
+    conn = OpenHttpConnection(NULL, (STRPTR)"example.com", 80, FALSE);
+    ag_log_ptr("OpenHttpConnection", "conn", conn);
+    ag_test_expect_null("OpenHttpConnection(NULL)", conn);
+    ag_test_expect_http_error("OpenHttpConnection(NULL)",
+        ERROR_HTTP_INVALID_HANDLE);
+
+    ag_step_log("Tier3: OpenHttpConnection(empty host)");
+    SetHttpError(0);
+    conn = OpenHttpConnection(session, NULL, 80, FALSE);
+    ag_log_ptr("OpenHttpConnection", "conn", conn);
+    ag_test_expect_null("OpenHttpConnection(NULL host)", conn);
+    ag_test_expect_http_error("OpenHttpConnection(NULL host)",
+        ERROR_HTTP_INVALID_URL);
+
+    ag_step_log("Tier3: OpenHttpConnection(empty string host)");
+    SetHttpError(0);
+    conn = OpenHttpConnection(session, (STRPTR)"", 80, FALSE);
+    ag_log_ptr("OpenHttpConnection", "conn", conn);
+    ag_test_expect_null("OpenHttpConnection(empty host)", conn);
+    ag_test_expect_http_error("OpenHttpConnection(empty host)",
+        ERROR_HTTP_INVALID_URL);
+
+    ag_step_log("Tier3: CloseHttpConnection(NULL)");
+    CloseHttpConnection(NULL);
+
+    ag_step_log("Tier3: HttpConnectionSendRequest (stub)");
+    SetHttpError(0);
+    rv = HttpConnectionSendRequest(NULL, (STRPTR)"GET", (STRPTR)"/", NULL);
+    ag_log_bool("HttpConnectionSendRequest", rv);
+    ag_test_expect_false("HttpConnectionSendRequest", rv);
+    ag_test_expect_http_error("HttpConnectionSendRequest",
+        ERROR_HTTP_NOT_IMPLEMENTED);
+
+    ag_step_log("Tier3: HttpConnectionReadBodyChunk (stub)");
+    SetHttpError(0);
+    rv = HttpConnectionReadBodyChunk(NULL, NULL, 64);
+    ag_log_long("HttpConnectionReadBodyChunk", rv);
+    ag_test_expect_false("HttpConnectionReadBodyChunk", rv);
+    ag_test_expect_http_error("HttpConnectionReadBodyChunk",
+        ERROR_HTTP_NOT_IMPLEMENTED);
+
+    ag_step_log("Tier3: HttpConnectionWriteBodyChunk (stub)");
+    SetHttpError(0);
+    rv = HttpConnectionWriteBodyChunk(NULL, NULL, 0);
+    ag_log_long("HttpConnectionWriteBodyChunk", rv);
+    ag_test_expect_false("HttpConnectionWriteBodyChunk", rv);
+    ag_test_expect_http_error("HttpConnectionWriteBodyChunk",
+        ERROR_HTTP_NOT_IMPLEMENTED);
+
+    ag_step_log("Tier3: HttpConnectionReadResponseLine(NULL)");
+    rv = HttpConnectionReadResponseLine(NULL, (STRPTR)linebuf,
+        (ULONG)sizeof(linebuf));
+    ag_log_long("HttpConnectionReadResponseLine", rv);
+    ag_test_expect_long("ReadResponseLine(NULL)", rv, 0);
+
+    ag_step_log("Tier3: HttpConnectionIsAlive(NULL)");
+    rv = (LONG)HttpConnectionIsAlive(NULL);
+    ag_log_bool("HttpConnectionIsAlive", rv);
+    ag_test_expect_long("HttpConnectionIsAlive(NULL)", rv, 0);
+
+    ag_step_log("Tier3: ResetHttpConnection(NULL)");
+    ResetHttpConnection(NULL);
 }
 
 static struct HttpCookieJar *
 ag_setup_cookie_jar(struct HttpSession *session, STRPTR url, STRPTR cookiefile)
 {
     struct HttpCookieJar *jar;
-    STRPTR cstr;
     LONG rv;
+
+    (void)url;
 
     ag_step_log("Cookie: NewHttpCookieJar");
     jar = NewHttpCookieJar();
@@ -605,23 +1046,6 @@ ag_setup_cookie_jar(struct HttpSession *session, STRPTR url, STRPTR cookiefile)
     if (cookiefile != NULL) {
         ag_step_log("Cookie: LoadHttpCookieJar");
         rv = LoadHttpCookieJar(jar, cookiefile);
-        ag_log_bool("LoadHttpCookieJar", rv);
-    } else if (ag_test_mode) {
-        ag_step_log("Cookie: SetHttpCookie");
-        rv = SetHttpCookie(jar,
-            (STRPTR)"test=value; Domain=.example.com; Path=/");
-        ag_log_bool("SetHttpCookie", rv);
-
-        ag_step_log("Cookie: GetHttpCookieString");
-        cstr = GetHttpCookieString(jar, url);
-        ag_log_str("GetHttpCookieString", cstr);
-
-        ag_step_log("Cookie: SaveHttpCookieJar");
-        rv = SaveHttpCookieJar(jar, (STRPTR)"T:aget_cookies.txt");
-        ag_log_bool("SaveHttpCookieJar", rv);
-
-        ag_step_log("Cookie: LoadHttpCookieJar");
-        rv = LoadHttpCookieJar(jar, (STRPTR)"T:aget_cookies.txt");
         ag_log_bool("LoadHttpCookieJar", rv);
     }
 
@@ -638,34 +1062,76 @@ ag_setup_cookie_jar(struct HttpSession *session, STRPTR url, STRPTR cookiefile)
     return jar;
 }
 
-static VOID
-ag_test_tier3_stubs(struct HttpSession *session)
+/*
+ * ag_selftest - offline amihttp.library API coverage (no HttpTransactionPerform).
+ */
+static LONG
+ag_selftest(STRPTR url)
 {
-    struct HttpConnection *conn;
+    struct HttpSession *session;
+    LONG err;
     LONG rv;
-    BOOL alive;
-    UBYTE buf[64];
 
-    ag_step_log("Tier3: OpenHttpConnection (stub)");
-    conn = OpenHttpConnection(session, (STRPTR)"example.com", 80, FALSE);
-    ag_log_ptr("OpenHttpConnection", "conn", conn);
-    ag_log_errno("after OpenHttpConnection");
-    if (conn == NULL) {
-        return;
+    session = NULL;
+    err = 0;
+    ag_step = 0;
+    ag_test_fails = 0;
+
+    ag_msgfh = (BPTR)ErrorOutput();
+    if (ag_msgfh == 0) {
+        ag_msgfh = Output();
     }
 
-    alive = HttpConnectionIsAlive(conn);
-    ag_log_bool("HttpConnectionIsAlive", alive ? 1 : 0);
+    ag_printf("AGet: self-test url=\"%s\"\n", url);
+    ag_flush_msg();
 
-    rv = HttpConnectionWrite(conn, (APTR)"test", 4);
-    ag_log_long("HttpConnectionWrite", rv);
-    ag_log_errno("after HttpConnectionWrite");
+    HttpBase = OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION);
+    if (HttpBase == NULL) {
+        ag_printf("AGet: cannot open %s\n", AMIHTTPNAME);
+        return 20;
+    }
 
-    rv = HttpConnectionRead(conn, (APTR)buf, (ULONG)sizeof(buf));
-    ag_log_long("HttpConnectionRead", rv);
+    rv = HttpBaseTags(
+        HTBT_ERRNOPTR, (ULONG)&ag_errno_slot,
+        TAG_DONE);
+    if (!rv) {
+        ag_log_fail("HttpBaseTagList", HttpError());
+        err = HttpError();
+        goto st_cleanup;
+    }
 
-    ResetHttpConnection(conn);
-    CloseHttpConnection(conn);
+    ag_test_tier0();
+    ag_test_url_utils(url);
+
+    ag_step_log("Tier1: NewHttpSession");
+    session = NewHttpSession();
+    ag_log_ptr("NewHttpSession", "session", session);
+    ag_test_expect_nonnull("NewHttpSession", session);
+    if (session == NULL) {
+        err = HttpError();
+        goto st_cleanup;
+    }
+
+    ag_test_session(session);
+    ag_test_cookies(session, url);
+    ag_test_transaction(session, url);
+    ag_test_tier3_offline(session);
+
+st_cleanup:
+    if (session != NULL) {
+        DisposeHttpSession(session);
+    }
+    if (HttpBase != NULL) {
+        CloseLibrary((struct Library *)HttpBase);
+        HttpBase = NULL;
+    }
+
+    if (ag_test_fails > 0) {
+        ag_printf("AGet: self-test FAILED (%ld failures)\n", ag_test_fails);
+        return ERROR_HTTP_PROTOCOL;
+    }
+    ag_printf("AGet: self-test OK (%ld steps)\n", (LONG)ag_step);
+    return err;
 }
 
 static LONG
@@ -718,6 +1184,19 @@ ag_read_body(struct HttpTransaction *txn, LONG expect_cl, LONG *out_total)
     chunk = 0;
     ag_body_last_byte = -1;
     ag_step_log("Tier2: HttpTransactionReadBody loop");
+
+    /*
+     * expect_cl is the decoded entity length when identity-coded.  With
+     * Content-Encoding (gzip/deflate) the header length is wire bytes only.
+     */
+    if (expect_cl >= 0) {
+        STRPTR ce;
+
+        ce = HttpTransactionRespHeader(txn, "Content-Encoding");
+        if (ce != NULL && ce[0] != '\0') {
+            expect_cl = -1;
+        }
+    }
 
     for (;;) {
         chunk++;
@@ -887,11 +1366,6 @@ ag_download(struct AGetArgs *args)
         goto dl_cleanup;
     }
 
-    if (ag_test_mode) {
-        ag_test_tier0();
-        ag_test_url_utils(args->URL);
-    }
-
     session = NewHttpSession();
     if (session == NULL) {
         ag_log_fail("NewHttpSession", HttpError());
@@ -915,9 +1389,6 @@ ag_download(struct AGetArgs *args)
     }
 
     cookie_jar = ag_setup_cookie_jar(session, args->URL, args->COOKIEFILE);
-    if (ag_test_mode) {
-        ag_test_tier3_stubs(session);
-    }
 
     txn = NewHttpTransaction(session);
     if (txn == NULL) {
@@ -978,9 +1449,6 @@ ag_download(struct AGetArgs *args)
                 goto dl_cleanup;
             }
         }
-    } else if (ag_test_mode) {
-        HttpTransactionAddHeader(txn,
-            (STRPTR)"X-AGet-Test", (STRPTR)"1");
     }
 
     ag_log_request_headers(args, method, user_agent, cookie_jar);
@@ -1139,8 +1607,8 @@ ag_usage(void)
         "  URL,TO/K,USERAGENT/K,HEAD/S,NOREDIR/S,ASYNC/S,VERBOSE/S,QUIET/S,"
         "TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M\n"
         "\n"
-        "Required:\n"
-        "  URL              http:// or https:// URL to fetch\n"
+        "Required (fetch):\n"
+        "  URL            http:// or https:// URL to fetch\n"
         "\n"
         "Output destination:\n"
         "  TO/K             write decoded body to this file (default: stdout)\n"
@@ -1161,13 +1629,14 @@ ag_usage(void)
         "  QUIET/S          stderr: errors only; stdout/file: body only\n"
         "  HEADERS/S        stderr: request/response headers (no API trace)\n"
         "  VERBOSE/S        stderr: full amihttp API step trace\n"
-        "  TEST/S           VERBOSE + Tier0/URL/cookie/Tier3 API smoke tests\n"
+        "  TEST/S           offline API self-test (no network fetch)\n"
         "\n"
         "Examples:\n"
         "  AGet URL=https://www.amigazen.com\n"
         "  AGet URL=http://example.com TO=RAM:page.html QUIET\n"
         "  AGet URL=https://host/ HEAD VERBOSE\n"
-        "  AGet URL=https://host/ TEST\n";
+        "  AGet TEST\n"
+        "  AGet TEST URL=http://example.com/\n";
 
     fh = Output();
     Write(fh, (APTR)ag_usage_msg, (ULONG)(sizeof(ag_usage_msg) - 1));
@@ -1179,6 +1648,7 @@ main(int argc, char **argv)
     struct RDArgs *rdargs;
     struct AGetArgs args;
     LONG err;
+    STRPTR test_url;
 
     (void)argc;
     (void)argv;
@@ -1188,12 +1658,35 @@ main(int argc, char **argv)
     ag_headers = FALSE;
     ag_test_mode = FALSE;
     ag_errno_slot = 0;
+    test_url = NULL;
 
     memset(&args, 0, sizeof(args));
     rdargs = ReadArgs((STRPTR)AGET_TEMPLATE, (LONG *)&args, NULL);
     if (rdargs == NULL) {
         ag_usage();
         return 20;
+    }
+
+    if (args.TEST) {
+        ag_test_mode = TRUE;
+        ag_verbose = TRUE;
+        test_url = args.URL;
+        if (test_url == NULL || test_url[0] == '\0') {
+            test_url = AG_TEST_URL;
+        }
+        err = ag_selftest(test_url);
+        FreeArgs(rdargs);
+        if (err != 0) {
+            ag_msgfh = (BPTR)ErrorOutput();
+            if (ag_msgfh == 0) {
+                ag_msgfh = Output();
+            }
+            if (ag_test_fails == 0) {
+                ag_log_fail("AGet", err);
+            }
+            return (err > 0 && err < 256) ? err : 20;
+        }
+        return 0;
     }
 
     if (args.URL == NULL || args.URL[0] == '\0') {
@@ -1205,10 +1698,7 @@ main(int argc, char **argv)
     ag_verbose = FALSE;
     ag_quiet = FALSE;
     ag_headers = (BOOL)args.HEADERS;
-    if (args.TEST) {
-        ag_test_mode = TRUE;
-        ag_verbose = TRUE;
-    } else if (args.VERBOSE) {
+    if (args.VERBOSE) {
         ag_verbose = TRUE;
     } else if (args.QUIET) {
         ag_quiet = TRUE;
@@ -1225,7 +1715,7 @@ main(int argc, char **argv)
         ag_log_fail("AGet", err);
         return (err > 0 && err < 256) ? err : 20;
     }
-    if (ag_verbose || ag_test_mode) {
+    if (ag_verbose) {
         ag_printf("AGet: OK\n");
     }
     return 0;

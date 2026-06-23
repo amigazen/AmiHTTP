@@ -83,12 +83,12 @@ __ASM__ __SAVE_DS__ OpenHttpConnection(
     struct HtStreamConn *hst;
     ULONG use_port;
 
-    if (!ht_check_handle(session ? session->hs_Magic : 0, HT_MAGIC_SESSION)) {
-        ht_set_error(ERROR_HTTP_INVALID_HANDLE);
-        return NULL;
-    }
     if (host == NULL || host[0] == '\0') {
         ht_set_error(ERROR_HTTP_INVALID_URL);
+        return NULL;
+    }
+    if (!ht_check_handle(session ? session->hs_Magic : 0, HT_MAGIC_SESSION)) {
+        ht_set_error(ERROR_HTTP_INVALID_HANDLE);
         return NULL;
     }
     if (HttpBase == NULL) {

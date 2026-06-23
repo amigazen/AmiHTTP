@@ -4,7 +4,7 @@
  *
  * amihttp_pragmas.h - SAS/C pragmas for amihttp.library
  *
- * Register masks follow NDK conventions (e.g. 09803 = a0,a1,d0 like GetGBuffers).
+ * Register masks follow NDK/SFDC conventions (e.g. 0802 = a0,d0; 09803 = a0,a1,d0).
  */
 
 #ifndef PRAGMAS_AMIHTTP_H
@@ -31,7 +31,7 @@
 #pragma libcall HttpBase HttpTransactionPerform          72 801
 #pragma libcall HttpBase HttpTransactionPerformAsync     78 801
 #pragma libcall HttpBase HttpTransactionIsComplete       7e 801
-#pragma libcall HttpBase WaitHttpTransaction             84 8002
+#pragma libcall HttpBase WaitHttpTransaction             84 0802
 #pragma libcall HttpBase AbortHttpTransaction            8a 801
 #pragma libcall HttpBase HttpTransactionGetStatusCode    90 801
 #pragma libcall HttpBase HttpTransactionGetStatusLine    96 801
@@ -44,7 +44,7 @@
 #pragma libcall HttpBase HttpTransactionGetTiming        c0 9802
 #pragma libcall HttpBase HttpTransactionGetLastError     c6 801
 #pragma libcall HttpBase SetHttpTransactionHook          cc 90803
-#pragma libcall HttpBase OpenHttpConnection              d2 098004
+#pragma libcall HttpBase OpenHttpConnection              d2 09804
 #pragma libcall HttpBase CloseHttpConnection             d8 801
 #pragma libcall HttpBase HttpConnectionWrite             de 09803
 #pragma libcall HttpBase HttpConnectionRead              e4 09803
@@ -70,7 +70,7 @@
 #pragma libcall HttpBase DisposeHttpCookieJar           15c 801
 #pragma libcall HttpBase LoadHttpCookieJar              162 9802
 #pragma libcall HttpBase SaveHttpCookieJar              168 9802
-#pragma libcall HttpBase FlushHttpCookieJar             16e 8002
+#pragma libcall HttpBase FlushHttpCookieJar             16e 0802
 #pragma libcall HttpBase SetHttpCookie                  174 9802
 #pragma libcall HttpBase GetHttpCookieString            17a 9802
 #pragma libcall HttpBase SetHttpError                   180 001

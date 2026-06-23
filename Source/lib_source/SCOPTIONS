@@ -10,6 +10,7 @@ IGNORE=306
 IGNORE=315
 IGNORE=316
 INCLUDEDIR=/include
+INCLUDEDIR=///z.library/SDK/Include_H
 INCLUDEDIR=SDK:Include_h
 INCLUDEDIR=netinclude:
 INCLUDEDIR=sslinclude:

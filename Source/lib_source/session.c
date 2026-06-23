@@ -20,6 +20,7 @@
 #include "amihttp_funcs.h"
 #include "private/ht_debug.h"
 #include "private/ht_internal.h"
+#include "private/ht_zlib.h"
 
 extern struct AmiHttpBase *HttpBase;
 
@@ -38,6 +39,10 @@ ht_session_defaults(struct HttpSession *session)
     session->hs_SslVerify = HTSSL_VERIFY_PEER;
     session->hs_RefererPolicy = HTRP_ORIGIN;
     session->hs_TaskSerial = (ULONG)FindTask(NULL);
+  /* When z.library is present, negotiate gzip/deflate by default. */
+    if (HttpBase != NULL && ht_zlib_ensure(HttpBase)) {
+        session->hs_AcceptEncoding = ht_strdup((STRPTR)"gzip, deflate");
+    }
 }
 
 struct HttpSession *
