@@ -60,6 +60,7 @@ struct AmiHttpBase
     ULONG                   ahb_MaxIdleConnections;
     ULONG                   ahb_IdleTimeout;
     ULONG                   ahb_SslVerify;
+    STRPTR                  ahb_CaBundlePath;
 
     /* Library-wide error state */
     LONG                    ahb_LastError;

@@ -41,6 +41,7 @@ ht_session_defaults(struct HttpSession *session)
     } else {
         session->hs_SslVerify = HTSSL_VERIFY_PEER;
     }
+    session->hs_CaBundlePath = NULL;
     session->hs_RefererPolicy = HTRP_ORIGIN;
     session->hs_TaskSerial = (ULONG)FindTask(NULL);
   /* When z.library is present, negotiate gzip/deflate by default. */
@@ -91,6 +92,9 @@ __ASM__ __SAVE_DS__ DisposeHttpSession(
     }
     if (session->hs_AcceptEncoding) {
         ht_free(session->hs_AcceptEncoding);
+    }
+    if (session->hs_CaBundlePath) {
+        ht_free(session->hs_CaBundlePath);
     }
     ht_free(session);
 }
@@ -163,6 +167,15 @@ __ASM__ __SAVE_DS__ SetHttpSessionAttrsA(
             break;
         case HTSA_SSL_VERIFY:
             session->hs_SslVerify = (ULONG)t->ti_Data;
+            break;
+        case HTSA_CA_BUNDLE_PATH:
+            if (session->hs_CaBundlePath) {
+                ht_free(session->hs_CaBundlePath);
+                session->hs_CaBundlePath = NULL;
+            }
+            if (t->ti_Data != 0 && ((STRPTR)t->ti_Data)[0] != '\0') {
+                session->hs_CaBundlePath = ht_strdup((STRPTR)t->ti_Data);
+            }
             break;
         case HTSA_SSL_CERT_HOOK:
             session->hs_Hooks[HTHK_CERT_VERIFY - 1] = (struct Hook *)t->ti_Data;

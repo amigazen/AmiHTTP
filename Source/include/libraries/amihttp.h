@@ -82,6 +82,8 @@ struct ParsedUrl;
 #define HTBT_SSL_VERIFY             (TAG_USER + 0x08)
 #define HTBT_LOG_HOOK               (TAG_USER + 0x09)
 #define HTBT_HTTP2_ENABLED          (TAG_USER + 0x0A)  /* reserved, v2 */
+/* PEM CA bundle for VERIFY_PEER when using amitls (mirrors ATBT_CA_BUNDLE_PATH). */
+#define HTBT_CA_BUNDLE_PATH         (TAG_USER + 0x0B)
 
 /****************************************************************************/
 /* SetHttpSessionAttrsA tags (Tier 1)                                         */
@@ -107,6 +109,8 @@ struct ParsedUrl;
 #define HTSA_TASK_SERIAL            (TAG_USER + 0x111)
 #define HTSA_PROXY_PAC_URL          (TAG_USER + 0x112)  /* reserved, v2 */
 #define HTSA_ALPN                   (TAG_USER + 0x113)  /* reserved, v2 */
+/* Per-session PEM CA bundle override (mirrors ATSA_CA_BUNDLE_PATH). */
+#define HTSA_CA_BUNDLE_PATH         (TAG_USER + 0x114)
 
 /****************************************************************************/
 /* SetHttpTransactionAttrsA tags (Tier 2)                                     */

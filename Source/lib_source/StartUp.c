@@ -244,6 +244,11 @@ __ASM__ __SAVE_DS__ ExpungeLib(__REG__(a6, struct AmiHttpBase *base))
     ht_pool_shutdown(base);
     L_CloseLibs();
 
+    if (base->ahb_CaBundlePath) {
+        ht_free(base->ahb_CaBundlePath);
+        base->ahb_CaBundlePath = NULL;
+    }
+
     Remove(&base->ahb_LibNode.lib_Node);
     FreeMem((APTR)((BYTE *)base - base->ahb_LibNode.lib_NegSize),
         base->ahb_LibNode.lib_NegSize + base->ahb_LibNode.lib_PosSize);

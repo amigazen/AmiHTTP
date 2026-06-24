@@ -160,6 +160,7 @@ struct HttpSession
     ULONG               hs_ReadTimeout;
     ULONG               hs_TotalTimeout;
     ULONG               hs_SslVerify;
+    STRPTR              hs_CaBundlePath;
     ULONG               hs_RefererPolicy;
     ULONG               hs_TaskSerial;
     struct HttpCookieJar *hs_CookieJar;
@@ -276,15 +277,18 @@ LONG ht_wire_to_status(LONG n);
 
 /* ht_transport.c */
 LONG ht_ensure_bsdsocket(struct AmiHttpBase *base);
+VOID ht_transport_bind_socket(struct AmiHttpBase *base);
 LONG ht_transport_global_init(struct AmiHttpBase *base);
 VOID ht_transport_global_shutdown(struct AmiHttpBase *base);
 LONG ht_transport_task_ssl_ensure(struct AmiHttpBase *base);
 VOID ht_transport_task_ssl_release(struct AmiHttpBase *base);
+VOID ht_transport_task_ssl_shutdown(struct AmiHttpBase *base);
 LONG ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
-    STRPTR host, ULONG port, BOOL ssl, ULONG timeout_secs, ULONG ssl_verify);
+    STRPTR host, ULONG port, BOOL ssl, ULONG timeout_secs, ULONG ssl_verify,
+    STRPTR ca_bundle_path);
 LONG ht_transport_connect_route(struct AmiHttpBase *base, struct HtConnection *conn,
     struct HtRoute *route, ULONG timeout_secs, ULONG ssl_verify,
-    struct HttpTransaction *txn);
+    struct HttpTransaction *txn, STRPTR ca_bundle_path);
 VOID ht_transport_disconnect(struct AmiHttpBase *base, struct HtConnection *conn);
 LONG ht_transport_send(struct AmiHttpBase *base, struct HtConnection *conn,
     APTR data, ULONG len);
@@ -293,7 +297,11 @@ LONG ht_transport_recv(struct AmiHttpBase *base, struct HtConnection *conn,
 BOOL ht_transport_conn_idle(struct AmiHttpBase *base, struct HtConnection *conn);
 
 /* ht_ssl_*.c - TLS backends (AmiSSL default, amitls when AMIHTTP_USE_AMITLS) */
-struct HtSsl *ht_ssl_create(STRPTR hostname);
+#ifdef AMIHTTP_USE_AMITLS
+VOID ht_ssl_sync_base_tags(struct AmiHttpBase *base);
+#endif
+
+struct HtSsl *ht_ssl_create(STRPTR hostname, STRPTR ca_bundle_path);
 VOID ht_ssl_destroy(struct HtSsl *s);
 LONG ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s,
     LONG sock, STRPTR hostname, ULONG verify_mode, ULONG timeout_secs,

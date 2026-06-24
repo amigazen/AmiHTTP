@@ -6,7 +6,7 @@
  *
  * ReadArgs template (must match ag_usage_msg):
  *   URL,TO/K,USERAGENT/K,HEAD/S,NOREDIR/S,ASYNC/S,VERBOSE/S,QUIET/S,
- *   TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M
+ *   TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M,CAFILE/K,INSECURE/S
  *
  * Output routing (AmigaDOS):
  *   - Response body  -> stdout, or TO/K file when given
@@ -57,7 +57,12 @@ static const char stack_cookie[] = "$STACK: 16384";
     "TEST/S," \
     "COOKIEFILE/K," \
     "HEADERS/S," \
-    "HEADER/K/M"
+    "HEADER/K/M," \
+    "CAFILE/K," \
+    "INSECURE/S"
+
+/* Default PEM trust bundle filename (resolved via GetProgramDir in ag_ca_build_path). */
+#define AGET_DEFAULT_CA_NAME   "cacert.pem"
 
 struct AGetArgs
 {
@@ -73,6 +78,8 @@ struct AGetArgs
     STRPTR  COOKIEFILE;
     LONG    HEADERS;
     STRPTR *HEADER;
+    STRPTR  CAFILE;
+    LONG    INSECURE;
 };
 
 static ULONG  ag_step;
@@ -323,6 +330,123 @@ ag_open_output(struct AGetArgs *args, BPTR *outfh, BOOL *close_out)
     return 0;
 }
 
+static BOOL
+ag_path_exists(STRPTR path)
+{
+    BPTR lock;
+
+    if (path == NULL || path[0] == '\0') {
+        return FALSE;
+    }
+    lock = Lock(path, ACCESS_READ);
+    if (lock == (BPTR)0) {
+        return FALSE;
+    }
+    UnLock(lock);
+    return TRUE;
+}
+
+static VOID
+ag_ca_build_path(STRPTR spec, char *buf, ULONG buflen)
+{
+    BPTR prog;
+    char dir[512];
+    ULONG n;
+    ULONG dlen;
+    BOOL need_sep;
+
+    if (buf == NULL || buflen == 0) {
+        return;
+    }
+    buf[0] = '\0';
+    if (spec == NULL || spec[0] == '\0') {
+        spec = (STRPTR)AGET_DEFAULT_CA_NAME;
+    }
+    /* Absolute AmigaDOS path (volume/assign) — use as-is. */
+    if (strchr((const char *)spec, ':') != NULL) {
+        n = 0;
+        while (spec[n] != '\0' && n + 1 < buflen) {
+            buf[n] = (char)spec[n];
+            n++;
+        }
+        buf[n] = '\0';
+        return;
+    }
+    /* Bare filename: resolve beside the AGet executable. */
+    prog = GetProgramDir();
+    if (prog != (BPTR)0) {
+        if (NameFromLock(prog, dir, (LONG)sizeof(dir))) {
+            dlen = (ULONG)strlen(dir);
+            need_sep = TRUE;
+            if (dlen > 0 && (dir[dlen - 1] == ':' || dir[dlen - 1] == '/')) {
+                need_sep = FALSE;
+            }
+            n = 0;
+            while (n < dlen && n + 1 < buflen) {
+                buf[n] = dir[n];
+                n++;
+            }
+            if (need_sep && n + 1 < buflen) {
+                buf[n++] = '/';
+            }
+            dlen = 0;
+            while (spec[dlen] != '\0' && n + 1 < buflen) {
+                buf[n++] = (char)spec[dlen++];
+            }
+            buf[n] = '\0';
+            UnLock(prog);
+            return;
+        }
+        UnLock(prog);
+    }
+    n = 0;
+    while (spec[n] != '\0' && n + 1 < buflen) {
+        buf[n] = (char)spec[n];
+        n++;
+    }
+    buf[n] = '\0';
+}
+
+/*
+ * Resolve TLS verify mode and PEM CA bundle path for amihttp base tags.
+ * Default: VERIFY_PEER with cacert.pem beside AGet (via GetProgramDir).
+ * CAFILE/K overrides the filename or full path; INSECURE/S disables verify.
+ */
+static LONG
+ag_tls_configure(struct AGetArgs *args, char *ca_buf, ULONG ca_buflen,
+    ULONG *out_verify)
+{
+    STRPTR spec;
+
+    if (out_verify == NULL || ca_buf == NULL || ca_buflen == 0) {
+        return ERROR_HTTP_INVALID_HANDLE;
+    }
+    ca_buf[0] = '\0';
+    if (args != NULL && args->INSECURE) {
+        *out_verify = HTSSL_VERIFY_NONE;
+        return 0;
+    }
+    if (args != NULL && args->CAFILE != NULL && args->CAFILE[0] != '\0') {
+        spec = args->CAFILE;
+    } else {
+        spec = (STRPTR)"cacert.pem";
+    }
+    ag_ca_build_path(spec, ca_buf, ca_buflen);
+    if (!ag_path_exists((STRPTR)ca_buf)) {
+        ag_printf("AGet: CA bundle not found: \"%s\"\n", ca_buf);
+        ag_printf("AGet: copy cacert.pem beside AGet, or use CAFILE=<path>, "
+            "or INSECURE/S\n");
+        ag_flush_msg();
+        return ERROR_HTTP_SSL_VERIFY;
+    }
+    *out_verify = HTSSL_VERIFY_PEER;
+    if (ag_verbose || ag_test_mode) {
+        ag_printf("AGet: TLS verify=peer ca=\"%s\"\n", ca_buf);
+        ag_flush_msg();
+    }
+    return 0;
+}
+
 static VOID
 ag_step_log(STRPTR label)
 {
@@ -355,7 +479,7 @@ ag_log_fail(STRPTR label, LONG code)
     char buf[128];
 
     HttpFault(code, label, (STRPTR)buf, (LONG)sizeof(buf));
-    ag_printf("AGet: %s\n", buf);
+    ag_printf("AGet: %s (HttpError=%ld)\n", buf, code);
     ag_flush_msg();
 }
 
@@ -1489,6 +1613,8 @@ ag_download(struct AGetArgs *args)
     ULONG et_perform_ms;
     ULONG et_body_ms;
     ULONG et_total_ms;
+    char ca_path[512];
+    ULONG ssl_verify;
 
     session = NULL;
     txn = NULL;
@@ -1536,14 +1662,31 @@ ag_download(struct AGetArgs *args)
         return 20;
     }
 
-    rv = HttpBaseTags(
-        HTBT_DEFAULT_USERAGENT, (ULONG)user_agent,
-        HTBT_DEFAULT_TIMEOUT,   (ULONG)120,
-        HTBT_MAX_IDLE_CONNECTIONS, (ULONG)4,
-        HTBT_IDLE_TIMEOUT,      (ULONG)60,
-        HTBT_SSL_VERIFY,        (ULONG)HTSSL_VERIFY_NONE,
-        HTBT_ERRNOPTR,          (ULONG)&ag_errno_slot,
-        TAG_DONE);
+    err = ag_tls_configure(args, ca_path, (ULONG)sizeof(ca_path), &ssl_verify);
+    if (err != 0) {
+        goto dl_cleanup;
+    }
+
+    if (ssl_verify == HTSSL_VERIFY_NONE) {
+        rv = HttpBaseTags(
+            HTBT_DEFAULT_USERAGENT, (ULONG)user_agent,
+            HTBT_DEFAULT_TIMEOUT,   (ULONG)120,
+            HTBT_MAX_IDLE_CONNECTIONS, (ULONG)4,
+            HTBT_IDLE_TIMEOUT,      (ULONG)60,
+            HTBT_SSL_VERIFY,        (ULONG)HTSSL_VERIFY_NONE,
+            HTBT_ERRNOPTR,          (ULONG)&ag_errno_slot,
+            TAG_DONE);
+    } else {
+        rv = HttpBaseTags(
+            HTBT_DEFAULT_USERAGENT, (ULONG)user_agent,
+            HTBT_DEFAULT_TIMEOUT,   (ULONG)120,
+            HTBT_MAX_IDLE_CONNECTIONS, (ULONG)4,
+            HTBT_IDLE_TIMEOUT,      (ULONG)60,
+            HTBT_SSL_VERIFY,        (ULONG)HTSSL_VERIFY_PEER,
+            HTBT_CA_BUNDLE_PATH,    (ULONG)ca_path,
+            HTBT_ERRNOPTR,          (ULONG)&ag_errno_slot,
+            TAG_DONE);
+    }
     if (!rv) {
         ag_log_fail("HttpBaseTagList", HttpError());
         err = HttpError();
@@ -1566,6 +1709,12 @@ ag_download(struct AGetArgs *args)
         HTSA_CONNECT_TIMEOUT,  (ULONG)60,
         HTSA_READ_TIMEOUT,     (ULONG)120,
         TAG_DONE);
+    if (ssl_verify != HTSSL_VERIFY_NONE && ca_path[0] != '\0') {
+        SetHttpSessionAttrs(session,
+            HTSA_SSL_VERIFY,     (ULONG)HTSSL_VERIFY_PEER,
+            HTSA_CA_BUNDLE_PATH, (ULONG)ca_path,
+            TAG_DONE);
+    }
     if (!rv) {
         ag_log_fail("SetHttpSessionAttrs", HttpError());
         err = HttpError();
@@ -1811,7 +1960,7 @@ ag_usage(void)
         "\n"
         "ReadArgs template:\n"
         "  URL,TO/K,USERAGENT/K,HEAD/S,NOREDIR/S,ASYNC/S,VERBOSE/S,QUIET/S,"
-        "TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M\n"
+        "TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M,CAFILE/K,INSECURE/S\n"
         "\n"
         "Required (fetch):\n"
         "  URL            URL to fetch (http:// or https://; scheme defaults to http)\n"
@@ -1825,6 +1974,11 @@ ag_usage(void)
         "  HEAD/S           send HEAD (headers only, no body read)\n"
         "  NOREDIR/S        do not follow 3xx Location redirects\n"
         "  COOKIEFILE/K     load cookies before request; save jar after success\n"
+        "\n"
+        "TLS (https, amitls builds):\n"
+        "  (default)        VERIFY_PEER using PROGDIR:cacert.pem beside AGet\n"
+        "  CAFILE/K         PEM CA bundle path (overrides default cacert.pem)\n"
+        "  INSECURE/S       skip TLS certificate verification\n"
         "\n"
         "Behaviour:\n"
         "  ASYNC/S          HttpTransactionPerformAsync + WaitHttpTransaction\n"
@@ -1876,13 +2030,7 @@ main(int argc, char **argv)
         err = ag_selftest();
         FreeArgs(rdargs);
         if (err != 0) {
-            ag_msgfh = (BPTR)ErrorOutput();
-            if (ag_msgfh == 0) {
-                ag_msgfh = Output();
-            }
-            if (ag_test_fails == 0) {
-                ag_log_fail("AGet", err);
-            }
+            /* ag_selftest() already logged; library is closed (HttpBase NULL). */
             return (err > 0 && err < 256) ? err : 20;
         }
         return 0;
@@ -1906,12 +2054,12 @@ main(int argc, char **argv)
     err = ag_download(&args);
     FreeArgs(rdargs);
 
+    /*
+     * ag_download() logs failures and closes amihttp.library before return.
+     * Do not call HttpFault/HttpError here — HttpBase is NULL and a libcall
+     * would jump through a null base pointer (system lockup).
+     */
     if (err != 0) {
-        ag_msgfh = (BPTR)ErrorOutput();
-        if (ag_msgfh == 0) {
-            ag_msgfh = Output();
-        }
-        ag_log_fail("AGet", err);
         return (err > 0 && err < 256) ? err : 20;
     }
     return 0;

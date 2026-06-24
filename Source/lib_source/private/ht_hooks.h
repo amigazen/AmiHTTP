@@ -14,8 +14,9 @@
 #ifndef LIBRARIES_AMIHTTP_H
 #include <libraries/amihttp.h>
 #endif
-
-struct AmiHttpBase;
+#ifndef AMIHTTP_AMIHTTPBASE_H
+#include <amihttp/amihttpbase.h>
+#endif
 
 BOOL ht_check_break(struct AmiHttpBase *base);
 BOOL ht_check_txn_abort(struct HttpTransaction *txn);

@@ -55,6 +55,8 @@ struct HtTaskSsl
     struct Node     ts_Node;
     struct Task    *ts_Task;
     ULONG           ts_RefCount;
+    /* TRUE only after InitAmiSSL() succeeded for this task entry. */
+    BOOL            ts_InitOk;
 };
 
 static struct List ht_task_ssl_list;
@@ -181,6 +183,7 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
     }
     ts->ts_Task = task;
     ts->ts_RefCount = 1;
+    ts->ts_InitOk = FALSE;
     AddHead(&ht_task_ssl_list, &ts->ts_Node);
     ReleaseSemaphore(&ht_task_ssl_sema);
     ht_sync_proto_bases(base);
@@ -188,9 +191,13 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
             AmiSSL_SocketBase, base->ahb_SocketBase,
             AmiSSL_ErrNoPtr, &errno,
             TAG_END) != 0) {
-        ht_transport_task_ssl_release(base);
+        ObtainSemaphore(&ht_task_ssl_sema);
+        Remove(&ts->ts_Node);
+        ReleaseSemaphore(&ht_task_ssl_sema);
+        ht_free(ts);
         return ERROR_HTTP_SSL_HANDSHAKE;
     }
+    ts->ts_InitOk = TRUE;
     return 0;
 }
 
@@ -212,16 +219,55 @@ ht_transport_task_ssl_release(struct AmiHttpBase *base)
                 ts->ts_RefCount--;
             }
             if (ts->ts_RefCount == 0) {
+                BOOL init_ok;
+
+                init_ok = ts->ts_InitOk;
                 Remove(&ts->ts_Node);
                 ReleaseSemaphore(&ht_task_ssl_sema);
-                CleanupAmiSSL(TAG_END);
+                if (init_ok) {
+                    CleanupAmiSSL(TAG_END);
+                }
                 ht_free(ts);
+                if (base != NULL) {
+                    ht_transport_bind_socket(base);
+                }
                 return;
             }
             break;
         }
     }
     ReleaseSemaphore(&ht_task_ssl_sema);
+}
+
+VOID
+ht_transport_task_ssl_shutdown(struct AmiHttpBase *base)
+{
+    struct HtTaskSsl *ts;
+    struct HtTaskSsl *next;
+    struct Task *task;
+
+    ht_ssl_task_list_init();
+    task = FindTask(NULL);
+    ObtainSemaphore(&ht_task_ssl_sema);
+    for (ts = (struct HtTaskSsl *)ht_task_ssl_list.lh_Head;
+         ts != NULL && ts->ts_Node.ln_Succ != NULL;
+         ts = next) {
+        next = (struct HtTaskSsl *)ts->ts_Node.ln_Succ;
+        if (ts->ts_Task == task && ts->ts_InitOk) {
+            while (ts->ts_RefCount > 0) {
+                CleanupAmiSSL(TAG_END);
+                ts->ts_RefCount--;
+            }
+        }
+        Remove(&ts->ts_Node);
+        ReleaseSemaphore(&ht_task_ssl_sema);
+        ht_free(ts);
+        ObtainSemaphore(&ht_task_ssl_sema);
+    }
+    ReleaseSemaphore(&ht_task_ssl_sema);
+    if (base != NULL) {
+        ht_transport_bind_socket(base);
+    }
 }
 
 static STRPTR
@@ -431,9 +477,11 @@ ht_ssl_verify_peer(struct HtSsl *s, ULONG verify_mode,
 }
 
 struct HtSsl *
-ht_ssl_create(STRPTR hostname)
+ht_ssl_create(STRPTR hostname, STRPTR ca_bundle_path)
 {
     struct HtSsl *s;
+
+    (void)ca_bundle_path;
 
     s = (struct HtSsl *)ht_alloc(sizeof(struct HtSsl), MEMF_CLEAR);
     if (s == NULL) {
@@ -465,6 +513,56 @@ ht_ssl_destroy(struct HtSsl *s)
     ht_free(s);
 }
 
+/*
+ * SSL_connect with WaitSelect bounds so a dead peer cannot wedge the machine.
+ */
+static LONG
+ht_ssl_do_connect(struct AmiHttpBase *base, SSL *ssl, LONG sock,
+    ULONG timeout_secs)
+{
+    int n;
+    int err;
+    fd_set rfds;
+    fd_set wfds;
+    struct timeval tv;
+    LONG nfds;
+    LONG rc;
+
+    if (timeout_secs == 0) {
+        timeout_secs = 60;
+    }
+    for (;;) {
+        n = SSL_connect(ssl);
+        if (n > 0) {
+            return 0;
+        }
+        err = SSL_get_error(ssl, n);
+        if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) {
+            return ERROR_HTTP_SSL_HANDSHAKE;
+        }
+        if (sock < 0) {
+            return ERROR_HTTP_SSL_HANDSHAKE;
+        }
+        FD_ZERO(&rfds);
+        FD_ZERO(&wfds);
+        if (err == SSL_ERROR_WANT_READ) {
+            FD_SET((int)sock, &rfds);
+        } else {
+            FD_SET((int)sock, &wfds);
+        }
+        nfds = sock + 1;
+        tv.tv_sec = (long)timeout_secs;
+        tv.tv_usec = 0;
+        if (base != NULL) {
+            ht_sync_proto_bases(base);
+        }
+        rc = WaitSelect((int)nfds, &rfds, NULL, &wfds, &tv, NULL);
+        if (rc <= 0) {
+            return ERROR_HTTP_CONNECT_TIMEOUT;
+        }
+    }
+}
+
 LONG
 ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     STRPTR hostname, ULONG verify_mode, ULONG timeout_secs,
@@ -475,10 +573,11 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     LONG rc;
     LONG vr;
 
-    (void)timeout_secs;
-
     if (s == NULL || sock < 0) {
         return ERROR_HTTP_INVALID_HANDLE;
+    }
+    if (timeout_secs == 0) {
+        timeout_secs = 60;
     }
     if (base != NULL) {
         ht_sync_proto_bases(base);
@@ -508,8 +607,9 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
         SSL_set_tlsext_host_name(ssl, (const char *)s->hs_Hostname);
     }
     SSL_set_fd(ssl, (int)sock);
-    if (SSL_connect(ssl) <= 0) {
-        if (verify_mode != HTSSL_VERIFY_NONE) {
+    rc = ht_ssl_do_connect(base, ssl, sock, timeout_secs);
+    if (rc != 0) {
+        if (rc == ERROR_HTTP_SSL_HANDSHAKE && verify_mode != HTSSL_VERIFY_NONE) {
             vr = (LONG)SSL_get_verify_result(ssl);
             if (vr != X509_V_OK) {
                 ht_ssl_capture_peer_cert(s);
@@ -520,7 +620,7 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
                 return ERROR_HTTP_SSL_VERIFY;
             }
         }
-        return ERROR_HTTP_SSL_HANDSHAKE;
+        return rc;
     }
     s->hs_HandshakeOk = TRUE;
     ht_ssl_capture_peer_cert(s);

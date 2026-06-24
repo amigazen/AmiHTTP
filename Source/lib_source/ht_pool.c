@@ -221,6 +221,7 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
     ULONG max_idle;
     ULONG idle_timeout;
     ULONG timeout;
+    STRPTR ca_bundle_path;
     LONG rc;
 
     if (base == NULL || session == NULL || route == NULL ||
@@ -307,8 +308,12 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
     } else {
         timeout = session->hs_ConnectTimeout;
     }
+    ca_bundle_path = session->hs_CaBundlePath;
+    if (ca_bundle_path == NULL || ca_bundle_path[0] == '\0') {
+        ca_bundle_path = base->ahb_CaBundlePath;
+    }
     rc = ht_transport_connect_route(base, conn, route, timeout,
-        session->hs_SslVerify, txn);
+        session->hs_SslVerify, txn, ca_bundle_path);
     if (rc != 0) {
         ht_set_error(rc);
         ht_connection_free(base, conn);
@@ -403,6 +408,7 @@ ht_pool_shutdown(struct AmiHttpBase *base)
         ht_connection_free(base, conn);
     }
     ReleaseSemaphore(&base->ahb_PoolSema);
+    ht_transport_task_ssl_shutdown(base);
     ht_transport_global_shutdown(base);
     ht_timer_shutdown();
 }

@@ -16,8 +16,9 @@ extern struct DosLibrary *DOSBase;
 struct Library *UtilityBase;
 struct Library *ZBase;
 struct Library *SocketBase;
-#ifdef AMIHTTP_USE_AMITLS
+/* SAS/C #pragma libcall TlsBase in atls_protos.h; synced from ahb_AmiTlsBase. */
 struct Library *TlsBase;
+#ifdef AMIHTTP_USE_AMITLS
 #else
 struct Library *AmiSSLMasterBase;
 struct Library *AmiSSLBase;
@@ -44,6 +45,7 @@ ht_sync_proto_bases(struct AmiHttpBase *base)
 #ifdef AMIHTTP_USE_AMITLS
     TlsBase = base->ahb_AmiTlsBase;
 #else
+    TlsBase = NULL;
     AmiSSLMasterBase = base->ahb_AmiSSLMasterBase;
     AmiSSLBase = base->ahb_AmiSSLBase;
     AmiSSLExtBase = base->ahb_AmiSSLExtBase;

@@ -333,7 +333,7 @@ ht_proxy_send_connect(struct AmiHttpBase *base, struct HtConnection *conn,
 LONG
 ht_transport_connect_route(struct AmiHttpBase *base, struct HtConnection *conn,
     struct HtRoute *route, ULONG timeout_secs, ULONG ssl_verify,
-    struct HttpTransaction *txn)
+    struct HttpTransaction *txn, STRPTR ca_bundle_path)
 {
     LONG rc;
     BOOL use_ssl;
@@ -343,7 +343,7 @@ ht_transport_connect_route(struct AmiHttpBase *base, struct HtConnection *conn,
         return ERROR_HTTP_INVALID_HANDLE;
     }
     rc = ht_transport_connect(base, conn, route->hr_ConnectHost,
-        route->hr_ConnectPort, FALSE, timeout_secs, ssl_verify);
+        route->hr_ConnectPort, FALSE, timeout_secs, ssl_verify, ca_bundle_path);
     if (rc != 0) {
         return rc;
     }
@@ -380,7 +380,7 @@ ht_transport_connect_route(struct AmiHttpBase *base, struct HtConnection *conn,
             return rc;
         }
         conn->hc_SslTaskHeld = TRUE;
-        conn->hc_SslCtx = ht_ssl_create(route->hr_OriginHost);
+        conn->hc_SslCtx = ht_ssl_create(route->hr_OriginHost, ca_bundle_path);
         if (conn->hc_SslCtx == NULL) {
             ht_transport_disconnect(base, conn);
             return ERROR_HTTP_OUT_OF_MEMORY;

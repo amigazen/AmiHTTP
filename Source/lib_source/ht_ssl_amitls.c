@@ -2,6 +2,12 @@
  * ht_ssl_amitls.c - amitls.library TLS backend for amihttp.library
  *
  * Built when AMIHTTP_USE_AMITLS is defined (see private/ht_ssl_config.h).
+ *
+ * TlsWrite/TlsRead return byte counts below ERROR_TLS_NOT_IMPLEMENTED (8800).
+ * ERROR_TLS_WANT_READ/WRITE mean WaitSelect on the raw TCP fd and retry (only
+ * when ATTA_NON_BLOCKING is set on the connection).
+ * Handshake completes on the first successful TlsWrite (deferred attach model).
+ * amihttp leaves the socket blocking so BearSSL can wait inside TlsWrite.
  */
 
 #define __USE_SYSBASE
@@ -38,11 +44,15 @@ extern struct Library *TlsBase;
 #include "private/ht_ssl.h"
 #include "private/ht_ssl_config.h"
 
+extern struct AmiHttpBase *HttpBase;
+
 struct HtTaskSsl
 {
     struct Node     ts_Node;
     struct Task    *ts_Task;
     ULONG           ts_RefCount;
+    /* TRUE only after TlsTaskAttach() succeeded for this task entry. */
+    BOOL            ts_InitOk;
 };
 
 static struct List ht_task_ssl_list;
@@ -86,6 +96,24 @@ ht_ssl_base_verify(struct AmiHttpBase *base)
     return ht_ssl_map_verify(base->ahb_SslVerify);
 }
 
+static BOOL
+ht_ssl_tls_ok(LONG rc)
+{
+    if (rc > 0 && rc < ERROR_TLS_NOT_IMPLEMENTED) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL
+ht_ssl_tls_want(LONG rc)
+{
+    if (rc == ERROR_TLS_WANT_READ || rc == ERROR_TLS_WANT_WRITE) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
 static LONG
 ht_ssl_map_tls_error(LONG tls_rc)
 {
@@ -110,21 +138,74 @@ ht_ssl_map_tls_error(LONG tls_rc)
     }
 }
 
+static LONG
+ht_ssl_wait_socket(struct AmiHttpBase *base, LONG sock, BOOL want_write,
+    ULONG timeout_secs)
+{
+    fd_set rfds;
+    fd_set wfds;
+    struct timeval tv;
+    LONG nfds;
+    LONG rc;
+
+    if (sock < 0) {
+        return ERROR_HTTP_INVALID_HANDLE;
+    }
+    if (base != NULL) {
+        ht_sync_proto_bases(base);
+    }
+    FD_ZERO(&rfds);
+    FD_ZERO(&wfds);
+    if (want_write) {
+        FD_SET((int)sock, &wfds);
+    } else {
+        FD_SET((int)sock, &rfds);
+    }
+    nfds = sock + 1;
+    if (timeout_secs == 0) {
+        timeout_secs = 60;
+    }
+    tv.tv_sec = (long)timeout_secs;
+    tv.tv_usec = 0;
+    rc = WaitSelect((int)nfds,
+        want_write ? NULL : &rfds,
+        want_write ? &wfds : NULL,
+        NULL, &tv, NULL);
+    if (rc <= 0) {
+        return ERROR_HTTP_READ_TIMEOUT;
+    }
+    return 0;
+}
+
 static VOID
 ht_ssl_apply_base_tags(struct AmiHttpBase *base)
 {
-    struct TagItem tags[3];
+    struct TagItem tags[4];
+    ULONG n;
 
     if (base == NULL || TlsBase == NULL) {
         return;
     }
-    tags[0].ti_Tag = ATBT_ERRNOPTR;
-    tags[0].ti_Data = (ULONG)(base->ahb_ErrnoPtr != NULL ?
+    n = 0;
+    tags[n].ti_Tag = ATBT_ERRNOPTR;
+    tags[n].ti_Data = (ULONG)(base->ahb_ErrnoPtr != NULL ?
         base->ahb_ErrnoPtr : (APTR)&errno);
-    tags[1].ti_Tag = ATBT_SSL_VERIFY;
-    tags[1].ti_Data = (ULONG)ht_ssl_base_verify(base);
-    tags[2].ti_Tag = TAG_END;
+    n++;
+    tags[n].ti_Tag = ATBT_SSL_VERIFY;
+    tags[n].ti_Data = (ULONG)ht_ssl_base_verify(base);
+    n++;
+    tags[n].ti_Tag = ATBT_CA_BUNDLE_PATH;
+    tags[n].ti_Data = (ULONG)(base->ahb_CaBundlePath != NULL ?
+        base->ahb_CaBundlePath : (STRPTR)"");
+    n++;
+    tags[n].ti_Tag = TAG_END;
     TlsBaseTagList(tags);
+}
+
+VOID
+ht_ssl_sync_base_tags(struct AmiHttpBase *base)
+{
+    ht_ssl_apply_base_tags(base);
 }
 
 LONG
@@ -198,6 +279,13 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
          ts != NULL && ts->ts_Node.ln_Succ != NULL;
          ts = (struct HtTaskSsl *)ts->ts_Node.ln_Succ) {
         if (ts->ts_Task == task) {
+            ht_sync_proto_bases(base);
+            errp = base->ahb_ErrnoPtr != NULL ? base->ahb_ErrnoPtr : (APTR)&errno;
+            rc = TlsTaskAttach(base->ahb_SocketBase, errp);
+            if (rc != 0) {
+                ReleaseSemaphore(&ht_task_ssl_sema);
+                return ht_ssl_map_tls_error(rc);
+            }
             ts->ts_RefCount++;
             ReleaseSemaphore(&ht_task_ssl_sema);
             return 0;
@@ -210,6 +298,7 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
     }
     ts->ts_Task = task;
     ts->ts_RefCount = 1;
+    ts->ts_InitOk = FALSE;
     AddHead(&ht_task_ssl_list, &ts->ts_Node);
     ReleaseSemaphore(&ht_task_ssl_sema);
 
@@ -217,9 +306,13 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
     errp = base->ahb_ErrnoPtr != NULL ? base->ahb_ErrnoPtr : (APTR)&errno;
     rc = TlsTaskAttach(base->ahb_SocketBase, errp);
     if (rc != 0) {
-        ht_transport_task_ssl_release(base);
+        ObtainSemaphore(&ht_task_ssl_sema);
+        Remove(&ts->ts_Node);
+        ReleaseSemaphore(&ht_task_ssl_sema);
+        ht_free(ts);
         return ht_ssl_map_tls_error(rc);
     }
+    ts->ts_InitOk = TRUE;
     return 0;
 }
 
@@ -228,8 +321,6 @@ ht_transport_task_ssl_release(struct AmiHttpBase *base)
 {
     struct HtTaskSsl *ts;
     struct Task *task;
-
-    (void)base;
 
     task = FindTask(NULL);
     ObtainSemaphore(&ht_task_ssl_sema);
@@ -241,16 +332,57 @@ ht_transport_task_ssl_release(struct AmiHttpBase *base)
                 ts->ts_RefCount--;
             }
             if (ts->ts_RefCount == 0) {
+                BOOL init_ok;
+
+                init_ok = ts->ts_InitOk;
                 Remove(&ts->ts_Node);
                 ReleaseSemaphore(&ht_task_ssl_sema);
-                TlsTaskDetach();
+                if (init_ok) {
+                    TlsTaskDetach();
+                }
                 ht_free(ts);
+                if (base != NULL) {
+                    ht_transport_bind_socket(base);
+                }
                 return;
             }
             break;
         }
     }
     ReleaseSemaphore(&ht_task_ssl_sema);
+}
+
+VOID
+ht_transport_task_ssl_shutdown(struct AmiHttpBase *base)
+{
+    struct HtTaskSsl *ts;
+    struct HtTaskSsl *next;
+    struct Task *task;
+
+    (void)base;
+
+    ht_ssl_task_list_init();
+    task = FindTask(NULL);
+    ObtainSemaphore(&ht_task_ssl_sema);
+    for (ts = (struct HtTaskSsl *)ht_task_ssl_list.lh_Head;
+         ts != NULL && ts->ts_Node.ln_Succ != NULL;
+         ts = next) {
+        next = (struct HtTaskSsl *)ts->ts_Node.ln_Succ;
+        if (ts->ts_Task == task && ts->ts_InitOk) {
+            while (ts->ts_RefCount > 0) {
+                TlsTaskDetach();
+                ts->ts_RefCount--;
+            }
+        }
+        Remove(&ts->ts_Node);
+        ReleaseSemaphore(&ht_task_ssl_sema);
+        ht_free(ts);
+        ObtainSemaphore(&ht_task_ssl_sema);
+    }
+    ReleaseSemaphore(&ht_task_ssl_sema);
+    if (base != NULL) {
+        ht_transport_bind_socket(base);
+    }
 }
 
 static VOID
@@ -299,18 +431,43 @@ ht_ssl_capture_peer_cert(struct HtSsl *s)
 }
 
 struct HtSsl *
-ht_ssl_create(STRPTR hostname)
+ht_ssl_create(STRPTR hostname, STRPTR ca_bundle_path)
 {
     struct HtSsl *s;
+    struct TagItem tags[2];
 
+    if (HttpBase != NULL) {
+        ht_sync_proto_bases(HttpBase);
+        ht_ssl_sync_base_tags(HttpBase);
+    }
     s = (struct HtSsl *)ht_alloc(sizeof(struct HtSsl), MEMF_CLEAR);
     if (s == NULL) {
         return NULL;
     }
     s->hs_Sock = -1;
+    s->hs_HandshakeOk = FALSE;
     s->hs_Hostname = ht_strdup(hostname);
-    s->hs_TlsConn = NewTlsConnection(NULL);
+    if (ca_bundle_path != NULL && ca_bundle_path[0] != '\0') {
+        s->hs_TlsCtx = NewTlsContext(NULL);
+        if (s->hs_TlsCtx == NULL) {
+            if (s->hs_Hostname) {
+                ht_free(s->hs_Hostname);
+            }
+            ht_free(s);
+            return NULL;
+        }
+        tags[0].ti_Tag = ATSA_CA_BUNDLE_PATH;
+        tags[0].ti_Data = (ULONG)ca_bundle_path;
+        tags[1].ti_Tag = TAG_END;
+        SetTlsContextAttrsA(s->hs_TlsCtx, tags);
+        s->hs_TlsConn = NewTlsConnection(s->hs_TlsCtx);
+    } else {
+        s->hs_TlsConn = NewTlsConnection(NULL);
+    }
     if (s->hs_TlsConn == NULL) {
+        if (s->hs_TlsCtx != NULL) {
+            DisposeTlsContext(s->hs_TlsCtx);
+        }
         if (s->hs_Hostname) {
             ht_free(s->hs_Hostname);
         }
@@ -357,8 +514,10 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     }
     if (base != NULL) {
         ht_sync_proto_bases(base);
+        ht_ssl_sync_base_tags(base);
     }
     s->hs_Sock = sock;
+    s->hs_HandshakeOk = FALSE;
     if (hostname != NULL) {
         if (s->hs_Hostname) {
             ht_free(s->hs_Hostname);
@@ -368,9 +527,16 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     if (verify_mode > HTSSL_VERIFY_PEER_STRICT) {
         verify_mode = HTSSL_VERIFY_PEER;
     }
+    /*
+     * Leave the TCP socket blocking (ht_tcp_connect() restores blocking mode).
+     * BearSSL runs the deferred handshake inside TlsWrite using atls_sock_wait_*
+     * loops, matching ATlsTest live HTTPS.  FIONBIO + ATTA_NON_BLOCKING breaks
+     * handshake progress because br_sslio stalls on RECVREC while the shim only
+     * surfaced WANT_WRITE to callers.
+     */
     tags[0].ti_Tag = ATTA_SSL_VERIFY;
     tags[0].ti_Data = (ULONG)ht_ssl_map_verify(verify_mode);
-    tags[1].ti_Tag = TAG_END;
+    tags[1].ti_Tag = TAG_DONE;
     rc = TlsAttachSocket(s->hs_TlsConn, sock, s->hs_Hostname, tags);
     if (rc != 0) {
         vr = TlsGetLastError(s->hs_TlsConn);
@@ -388,31 +554,51 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
         }
         return ht_ssl_map_tls_error(rc);
     }
-    s->hs_HandshakeOk = TRUE;
-    ht_ssl_capture_peer_cert(s);
-    if (verify_mode != HTSSL_VERIFY_NONE && s->hs_CertVerifyResult != 0) {
-        if (txn != NULL && ht_hook_cert_verify(txn, s, s->hs_CertVerifyResult)) {
-            s->hs_HandshakeOk = TRUE;
-            return 0;
-        }
-        return ERROR_HTTP_SSL_VERIFY;
-    }
     return 0;
 }
 
 LONG
 ht_ssl_send(struct HtSsl *s, APTR data, ULONG len)
 {
+    struct AmiHttpBase *base;
     LONG n;
+    LONG err;
+    ULONG attempts;
 
     if (s == NULL || s->hs_TlsConn == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
     }
-    n = TlsWrite(s->hs_TlsConn, data, len);
-    if (n <= 0) {
-        return ERROR_HTTP_WRITE_FAILED;
+    base = HttpBase;
+    if (base != NULL) {
+        ht_sync_proto_bases(base);
     }
-    return n;
+    attempts = 0;
+    for (;;) {
+        attempts++;
+        if (attempts > 200) {
+            return ERROR_HTTP_WRITE_FAILED;
+        }
+        n = TlsWrite(s->hs_TlsConn, data, len);
+        if (ht_ssl_tls_ok(n)) {
+            if (!s->hs_HandshakeOk) {
+                s->hs_HandshakeOk = TRUE;
+                ht_ssl_capture_peer_cert(s);
+            }
+            return n;
+        }
+        err = TlsGetLastError(s->hs_TlsConn);
+        if (err == 0) {
+            err = n;
+        }
+        if (ht_ssl_tls_want(err)) {
+            if (ht_ssl_wait_socket(base, s->hs_Sock,
+                (err == ERROR_TLS_WANT_WRITE) ? TRUE : FALSE, 60) != 0) {
+                return ERROR_HTTP_WRITE_FAILED;
+            }
+            continue;
+        }
+        return ht_ssl_map_tls_error(err);
+    }
 }
 
 LONG
@@ -420,8 +606,8 @@ ht_ssl_recv(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     APTR buf, ULONG len, ULONG timeout_secs)
 {
     LONG n;
-
-    (void)sock;
+    LONG err;
+    ULONG attempts;
 
     if (s == NULL || s->hs_TlsConn == NULL || buf == NULL || len == 0) {
         return HT_IO_ERROR(ERROR_HTTP_INVALID_HANDLE);
@@ -429,17 +615,47 @@ ht_ssl_recv(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     if (base != NULL) {
         ht_sync_proto_bases(base);
     }
-    n = TlsRead(s->hs_TlsConn, buf, len, timeout_secs);
-    if (n > 0) {
-        return n;
+    if (sock < 0) {
+        sock = s->hs_Sock;
     }
-    if (n == 0) {
-        return 0;
+    attempts = 0;
+    for (;;) {
+        attempts++;
+        if (attempts > 200) {
+            return HT_IO_ERROR(ERROR_HTTP_READ_FAILED);
+        }
+        if (TlsPending(s->hs_TlsConn) <= 0 && sock >= 0 && timeout_secs > 0) {
+            if (ht_ssl_wait_socket(base, sock, FALSE, timeout_secs) != 0) {
+                return HT_IO_ERROR(ERROR_HTTP_READ_TIMEOUT);
+            }
+        }
+        n = TlsRead(s->hs_TlsConn, buf, len, timeout_secs);
+        if (ht_ssl_tls_ok(n)) {
+            return n;
+        }
+        if (n == 0) {
+            return 0;
+        }
+        err = TlsGetLastError(s->hs_TlsConn);
+        if (err == 0) {
+            err = n;
+        }
+        if (ht_ssl_tls_want(err)) {
+            if (ht_ssl_wait_socket(base, sock,
+                (err == ERROR_TLS_WANT_WRITE) ? TRUE : FALSE,
+                timeout_secs) != 0) {
+                return HT_IO_ERROR(ERROR_HTTP_READ_TIMEOUT);
+            }
+            continue;
+        }
+        if (err == ERROR_TLS_HANDSHAKE) {
+            return HT_IO_ERROR(ERROR_HTTP_SSL_HANDSHAKE);
+        }
+        if (err == ERROR_TLS_READ_TIMEOUT) {
+            return HT_IO_ERROR(ERROR_HTTP_READ_TIMEOUT);
+        }
+        return HT_IO_ERROR(ERROR_HTTP_READ_FAILED);
     }
-    if (TlsGetLastError(s->hs_TlsConn) == ERROR_TLS_READ_TIMEOUT) {
-        return HT_IO_ERROR(ERROR_HTTP_READ_TIMEOUT);
-    }
-    return HT_IO_ERROR(ERROR_HTTP_READ_FAILED);
 }
 
 BOOL

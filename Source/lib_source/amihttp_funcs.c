@@ -68,6 +68,20 @@ __ASM__ __SAVE_DS__ HttpBaseTagList(
         case HTBT_SSL_VERIFY:
             HttpBase->ahb_SslVerify = (ULONG)t->ti_Data;
             break;
+        case HTBT_CA_BUNDLE_PATH:
+            if (HttpBase->ahb_CaBundlePath) {
+                ht_free(HttpBase->ahb_CaBundlePath);
+                HttpBase->ahb_CaBundlePath = NULL;
+            }
+            if (t->ti_Data != 0 && ((STRPTR)t->ti_Data)[0] != '\0') {
+                HttpBase->ahb_CaBundlePath = ht_strdup((STRPTR)t->ti_Data);
+            }
+#ifdef AMIHTTP_USE_AMITLS
+            if (HttpBase->ahb_SslGlobalOpen) {
+                ht_ssl_sync_base_tags(HttpBase);
+            }
+#endif
+            break;
         case HTBT_DEFAULT_TIMEOUT:
             HttpBase->ahb_DefaultTimeout = (ULONG)t->ti_Data;
             break;
