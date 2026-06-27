@@ -13,7 +13,9 @@
 #include <string.h>
 
 #include <proto/exec.h>
-#include <proto/alib.h>
+#include <proto/dos.h>
+
+#include <dos/dostags.h>
 
 #include <amihttp/amihttpbase.h>
 #include <libraries/amihttp.h>
@@ -53,12 +55,14 @@ ht_async_signal(struct HttpTransaction *txn)
 }
 
 static VOID
-ht_async_worker(APTR args)
+ht_async_worker(VOID)
 {
     struct HtAsyncJob *job;
     struct HttpTransaction *txn;
+    struct Task *self;
 
-    job = (struct HtAsyncJob *)args;
+    self = FindTask(NULL);
+    job = (struct HtAsyncJob *)self->tc_UserData;
     if (job == NULL) {
         RemTask(NULL);
         return;
@@ -98,12 +102,16 @@ ht_async_start(struct HttpTransaction *txn)
     job->hj_Txn = txn;
     job->hj_Base = HttpBase;
     strcpy((char *)name, "amihttp");
-    task = CreateTask((STRPTR)name, 0, (APTR)ht_async_worker, HT_ASYNC_STACK,
-        (APTR)job, 0);
+    task = (struct Task *)CreateNewProcTags(
+        NP_Entry, (ULONG)ht_async_worker,
+        NP_StackSize, (ULONG)HT_ASYNC_STACK,
+        NP_Name, (ULONG)name,
+        TAG_END);
     if (task == NULL) {
         ht_free(job);
         return ERROR_HTTP_OUT_OF_MEMORY;
     }
+    task->tc_UserData = (APTR)job;
     job->hj_Worker = task;
     txn->ht_AsyncRunning = TRUE;
     txn->ht_Async = TRUE;
@@ -116,7 +124,6 @@ ht_async_wait(struct HttpTransaction *txn, ULONG timeout_secs)
 {
     ULONG mask;
     ULONG elapsed;
-    ULONG tick;
 
     if (txn == NULL) {
         return;
@@ -142,8 +149,13 @@ ht_async_wait(struct HttpTransaction *txn, ULONG timeout_secs)
     }
     /* No notify signal: poll until complete or timeout. */
     elapsed = 0;
-    tick = (timeout_secs == 0) ? 0xFFFFFFFFUL : timeout_secs;
-    while (txn->ht_AsyncRunning && elapsed < tick) {
+    if (timeout_secs == 0) {
+        while (txn->ht_AsyncRunning) {
+            Delay(50);
+        }
+        return;
+    }
+    while (txn->ht_AsyncRunning && elapsed < timeout_secs) {
         Delay(50);
         elapsed++;
     }
@@ -152,14 +164,13 @@ ht_async_wait(struct HttpTransaction *txn, ULONG timeout_secs)
 VOID
 ht_async_cancel(struct HttpTransaction *txn)
 {
+    struct Task *worker;
+
     if (txn == NULL) {
         return;
     }
-    if (txn->ht_WorkerTask != NULL && txn->ht_AsyncRunning) {
-        /*
-         * AbortHttpTransaction drops the connection; worker may still exit
-         * from ht_txn_perform_sync with an error.
-         */
-        txn->ht_WorkerTask = NULL;
+    worker = txn->ht_WorkerTask;
+    if (worker != NULL && txn->ht_AsyncRunning) {
+        Signal(worker, SIGBREAKF_CTRL_C);
     }
 }

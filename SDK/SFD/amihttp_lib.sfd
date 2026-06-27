@@ -107,4 +107,8 @@ STRPTR HttpJoinUri(STRPTR base_url, STRPTR relative_url) (a0,a1)
 *
 LONG HttpTransactionGetPeerCert(struct HttpTransaction *txn, struct HttpSslPeerCert *cert) (a0,a1)
 VOID HttpPeerCertFree(struct HttpSslPeerCert *cert) (a0)
+STRPTR HttpTransactionRespHeaderNext(struct HttpTransaction *txn, STRPTR header_name, STRPTR prev_value) (a0,a1,a2)
+BOOL HttpTransactionRespHeaderByIndex(struct HttpTransaction *txn, ULONG index, STRPTR *name_out, STRPTR *value_out) (a0,d0,a1,a2)
+struct HttpCookieJar *NewHttpCookieJarTags(struct TagItem *tags) (a0)
+LONG HttpTransactionGetCipher(struct HttpTransaction *txn, STRPTR buf, ULONG buflen) (a0,a1,d0)
 ==end

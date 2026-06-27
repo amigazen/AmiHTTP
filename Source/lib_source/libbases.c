@@ -9,6 +9,7 @@
 #include <proto/exec.h>
 
 #include <amihttp/amihttpbase.h>
+#include "private/ht_internal.h"
 #include "private/ht_ssl_config.h"
 
 extern struct DosLibrary *DOSBase;
@@ -35,12 +36,20 @@ struct Device *TimerBase;
 VOID
 ht_sync_proto_bases(struct AmiHttpBase *base)
 {
+    struct Library *sock;
+
     if (base == NULL) {
         return;
     }
     UtilityBase = base->ahb_UtilityBase;
     ZBase = base->ahb_ZBase;
-    SocketBase = base->ahb_SocketBase;
+    sock = ht_task_current_socket_base(base);
+    if (sock != NULL) {
+        SocketBase = sock;
+        base->ahb_SocketBase = sock;
+    } else {
+        SocketBase = base->ahb_SocketBase;
+    }
     DOSBase = (struct DosLibrary *)base->ahb_DOSBase;
 #ifdef AMIHTTP_USE_AMITLS
     TlsBase = base->ahb_AmiTlsBase;

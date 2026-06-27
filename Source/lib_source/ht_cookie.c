@@ -15,6 +15,10 @@
 #include <string.h>
 
 #include <proto/exec.h>
+#include <proto/utility.h>
+#include <proto/alib.h>
+
+#include <utility/hooks.h>
 
 #include "private/ht_internal.h"
 
@@ -494,5 +498,93 @@ ht_cookie_ingest_headers(struct HttpCookieJar *jar, struct HttpTransaction *txn)
             ht_str_ieq(hh->hh_Name, (STRPTR)"Set-Cookie")) {
             ht_cookie_store_line(jar, url, hh->hh_Value, TRUE);
         }
+    }
+}
+
+static STRPTR
+ht_cookie_resp_header_value(struct HttpTransaction *txn, STRPTR name)
+{
+    struct HttpHeader *hh;
+
+    if (txn == NULL || name == NULL) {
+        return NULL;
+    }
+    for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
+         hh != NULL && hh->hh_Node.ln_Succ != NULL;
+         hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
+        if (hh->hh_Name != NULL && ht_str_ieq(hh->hh_Name, name)) {
+            return hh->hh_Value;
+        }
+    }
+    return NULL;
+}
+
+LONG
+ht_cookie_append_request(struct HttpCookieJar *jar, struct HttpTransaction *txn,
+    BOOL secure, STRPTR buf, ULONG buflen)
+{
+    struct HttpHookCookieRequest msg;
+    STRPTR val;
+    ULONG rc;
+    ULONG need;
+
+    if (jar == NULL || jar->hj_RequestHook == NULL || txn == NULL ||
+        buf == NULL || buflen == 0) {
+        return 0;
+    }
+    msg.hcr_Transaction = txn;
+    msg.hcr_Url = txn->ht_Url;
+    msg.hcr_Secure = secure;
+    msg.hcr_Value = NULL;
+    rc = CallHookPkt(jar->hj_RequestHook, NULL, (APTR)&msg);
+    val = msg.hcr_Value;
+    if (rc == 0 || val == NULL || val[0] == '\0') {
+        return 0;
+    }
+    val = ht_strdup(val);
+    if (val == NULL) {
+        return ERROR_HTTP_OUT_OF_MEMORY;
+    }
+    need = 9UL + ht_strlen(val) + 2UL;
+    if (need >= buflen) {
+        ht_free(val);
+        return ERROR_HTTP_OUT_OF_MEMORY;
+    }
+    strcat((char *)buf, "Cookie: ");
+    strcat((char *)buf, (char *)val);
+    strcat((char *)buf, "\r\n");
+    ht_free(val);
+    return 0;
+}
+
+VOID
+ht_cookie_dispatch_response(struct HttpCookieJar *jar,
+    struct HttpTransaction *txn)
+{
+    struct HttpHeader *hh;
+    struct HttpHookCookieResponse msg;
+    STRPTR date_hdr;
+
+    if (jar == NULL || txn == NULL) {
+        return;
+    }
+    if (jar->hj_ResponseHook != NULL) {
+        date_hdr = ht_cookie_resp_header_value(txn, (STRPTR)"Date");
+        msg.hcs_Transaction = txn;
+        msg.hcs_Url = txn->ht_Url;
+        msg.hcs_DateHeader = date_hdr;
+        for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
+             hh != NULL && hh->hh_Node.ln_Succ != NULL;
+             hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
+            if (hh->hh_Name != NULL && hh->hh_Value != NULL &&
+                ht_str_ieq(hh->hh_Name, (STRPTR)"Set-Cookie")) {
+                msg.hcs_SetCookieLine = hh->hh_Value;
+                (void)CallHookPkt(jar->hj_ResponseHook, NULL, (APTR)&msg);
+            }
+        }
+        return;
+    }
+    if (jar->hj_RequestHook == NULL) {
+        ht_cookie_ingest_headers(jar, txn);
     }
 }

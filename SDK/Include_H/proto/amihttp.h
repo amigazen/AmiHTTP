@@ -97,6 +97,11 @@ static LONG SetHttpTransactionAttrs(struct HttpTransaction *txn, Tag tag1, ...)
     return SetHttpTransactionAttrsA(txn, (struct TagItem *)&tag1);
 }
 
+static struct HttpCookieJar *HttpCookieJarTags(Tag tag1, ...)
+{
+    return NewHttpCookieJarTags((struct TagItem *)&tag1);
+}
+
 #endif /* HT_VARARGS_DEFINED */
 
 #endif /* PROTO_AMIHTTP_H */

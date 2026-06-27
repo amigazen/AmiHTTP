@@ -76,12 +76,16 @@ ht_txn_free_peer_cert(struct HttpTransaction *txn)
     if (txn->ht_CertSerial) {
         ht_free(txn->ht_CertSerial);
     }
+    if (txn->ht_Cipher) {
+        ht_free(txn->ht_Cipher);
+    }
     txn->ht_CertSubject = NULL;
     txn->ht_CertIssuer = NULL;
     txn->ht_CertCommonName = NULL;
     txn->ht_CertNotBefore = NULL;
     txn->ht_CertNotAfter = NULL;
     txn->ht_CertSerial = NULL;
+    txn->ht_Cipher = NULL;
     txn->ht_CertPresent = FALSE;
     txn->ht_CertVerifyResult = 0;
 }
@@ -104,6 +108,7 @@ ht_txn_copy_peer_cert(struct HttpTransaction *txn, struct HtConnection *conn)
     txn->ht_CertNotAfter = tmp.hpc_NotAfter;
     txn->ht_CertSerial = tmp.hpc_Serial;
     txn->ht_CertVerifyResult = tmp.hpc_VerifyResult;
+    txn->ht_Cipher = ht_ssl_cipher_dup(conn->hc_SslCtx);
 }
 
 static VOID
@@ -381,7 +386,7 @@ ht_txn_perform_once(struct HttpTransaction *txn)
         ht_txn_copy_peer_cert(txn, txn->ht_Conn);
     }
     if (txn->ht_Session != NULL && txn->ht_Session->hs_CookieJar != NULL) {
-        ht_cookie_ingest_headers(txn->ht_Session->hs_CookieJar, txn);
+        ht_cookie_dispatch_response(txn->ht_Session->hs_CookieJar, txn);
     }
     /*
      * Redirect hops close the socket without Readdata().
@@ -410,10 +415,12 @@ ht_txn_perform_once(struct HttpTransaction *txn)
 
 struct HttpTransaction *
 __ASM__ __SAVE_DS__ NewHttpTransaction(
-    __REG__(a0, struct HttpSession *session))
+    __REG__(a0, struct HttpSession *session),
+    __REG__(a6, struct AmiHttpBase *libbase))
 {
     struct HttpTransaction *txn;
 
+    ht_lvo_bind(libbase);
     htDbgPut("NewHttpTransaction");
     if (session == NULL || !ht_check_handle(session->hs_Magic, HT_MAGIC_SESSION)) {
         ht_set_error(ERROR_HTTP_INVALID_HANDLE);
@@ -438,11 +445,13 @@ __ASM__ __SAVE_DS__ NewHttpTransaction(
 
 VOID
 __ASM__ __SAVE_DS__ DisposeHttpTransaction(
-    __REG__(a0, struct HttpTransaction *txn))
+    __REG__(a0, struct HttpTransaction *txn),
+    __REG__(a6, struct AmiHttpBase *libbase))
 {
     struct HttpHeader *hh;
     struct HttpHeader *next;
 
+    ht_lvo_bind(libbase);
     if (txn == NULL) {
         return;
     }
@@ -903,6 +912,99 @@ __ASM__ __SAVE_DS__ HttpTransactionRespHeader(
     return NULL;
 }
 
+STRPTR
+__ASM__ __SAVE_DS__ HttpTransactionRespHeaderNext(
+    __REG__(a0, struct HttpTransaction *txn),
+    __REG__(a1, STRPTR header_name),
+    __REG__(a2, STRPTR prev_value))
+{
+    struct HttpHeader *hh;
+    BOOL past_prev;
+
+    if (!ht_check_handle(txn ? txn->ht_Magic : 0, HT_MAGIC_TXN)) {
+        return NULL;
+    }
+    if (header_name == NULL) {
+        return NULL;
+    }
+    past_prev = (prev_value == NULL) ? TRUE : FALSE;
+    for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
+         hh != NULL && hh->hh_Node.ln_Succ != NULL;
+         hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
+        if (hh->hh_Name == NULL || hh->hh_Value == NULL) {
+            continue;
+        }
+        if (stricmp((char *)hh->hh_Name, (char *)header_name) != 0) {
+            continue;
+        }
+        if (!past_prev) {
+            if (hh->hh_Value == prev_value) {
+                past_prev = TRUE;
+            }
+            continue;
+        }
+        return hh->hh_Value;
+    }
+    return NULL;
+}
+
+BOOL
+__ASM__ __SAVE_DS__ HttpTransactionRespHeaderByIndex(
+    __REG__(a0, struct HttpTransaction *txn),
+    __REG__(d0, ULONG index),
+    __REG__(a1, STRPTR *name_out),
+    __REG__(a2, STRPTR *value_out))
+{
+    struct HttpHeader *hh;
+    ULONG i;
+
+    if (!ht_check_handle(txn ? txn->ht_Magic : 0, HT_MAGIC_TXN)) {
+        return FALSE;
+    }
+    if (name_out == NULL || value_out == NULL) {
+        return FALSE;
+    }
+    i = 0;
+    for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
+         hh != NULL && hh->hh_Node.ln_Succ != NULL;
+         hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
+        if (hh->hh_Name == NULL || hh->hh_Value == NULL) {
+            continue;
+        }
+        if (i == index) {
+            *name_out = hh->hh_Name;
+            *value_out = hh->hh_Value;
+            return TRUE;
+        }
+        i++;
+    }
+    return FALSE;
+}
+
+LONG
+__ASM__ __SAVE_DS__ HttpTransactionGetCipher(
+    __REG__(a0, struct HttpTransaction *txn),
+    __REG__(a1, STRPTR buf),
+    __REG__(d0, ULONG buflen))
+{
+    ULONG n;
+
+    if (!ht_check_handle(txn ? txn->ht_Magic : 0, HT_MAGIC_TXN)) {
+        return 0;
+    }
+    if (buf == NULL || buflen == 0) {
+        return 0;
+    }
+    if (txn->ht_Cipher == NULL || txn->ht_Cipher[0] == '\0') {
+        buf[0] = '\0';
+        return 0;
+    }
+    strncpy((char *)buf, (char *)txn->ht_Cipher, buflen - 1);
+    buf[buflen - 1] = '\0';
+    n = (ULONG)strlen((char *)buf);
+    return (LONG)n;
+}
+
 struct List *
 __ASM__ __SAVE_DS__ HttpTransactionRespHeaders(
     __REG__(a0, struct HttpTransaction *txn))
@@ -917,7 +1019,8 @@ LONG
 __ASM__ __SAVE_DS__ HttpTransactionReadBody(
     __REG__(a0, struct HttpTransaction *txn),
     __REG__(a1, APTR buffer),
-    __REG__(d0, ULONG buflen))
+    __REG__(d0, ULONG buflen),
+    __REG__(a6, struct AmiHttpBase *libbase))
 {
     struct HttpTransaction *tx;
     APTR dest;
@@ -925,6 +1028,7 @@ __ASM__ __SAVE_DS__ HttpTransactionReadBody(
     LONG rc;
     LONG n;
 
+    ht_lvo_bind(libbase);
     /*
      * Copy a0 before touching a1/d0: SAS/C may use a0 as scratch when
      * spilling register parameters to locals.

@@ -4,7 +4,7 @@
  *
  * LibInit.c - ROMTag, DataTab, and dependency open/close for amihttp.library
  *
- * bsdsocket opens lazily on first HTTP/HTTPS use.
+ * bsdsocket opens in L_OpenLibs and is shared until L_CloseLibs/ExpungeLib.
  * TLS: AmiSSL (default) or amitls.library when AMIHTTP_USE_AMITLS is defined.
  * utility.library v47+ is required for SNPrintf/Strncpy/Strncat in ht_url.c.
  */
@@ -29,7 +29,11 @@
 #include "compiler.h"
 
 #define HTLIBNAME "amihttp"
+#ifdef AMIHTTP_USE_AMITLS
+#define HTLIBVER  " 1.0 amitls build " HT_BUILD_ID_STR
+#else
 #define HTLIBVER  " 1.0 (22.6.2026)"
+#endif
 
 const char HT_LibName[] = HTLIBNAME ".library";
 const char HT_LibID[]   = HTLIBNAME HTLIBVER;
@@ -49,7 +53,6 @@ L_OpenLibs(struct AmiHttpBase *base)
     SysBase = *((struct ExecBase **)4);
 
     if (base != NULL) {
-        base->ahb_SocketBase = NULL;
 #ifdef AMIHTTP_USE_AMITLS
         base->ahb_AmiTlsBase = NULL;
 #else
@@ -62,6 +65,7 @@ L_OpenLibs(struct AmiHttpBase *base)
         base->ahb_UtilityBase = NULL;
         base->ahb_ZBase = NULL;
         base->ahb_ZDecodeReady = FALSE;
+        base->ahb_SocketBase = NULL;
     }
     ZBase = NULL;
 
@@ -101,6 +105,8 @@ L_OpenLibs(struct AmiHttpBase *base)
         }
     }
 
+    /* bsdsocket opens per Exec task on first I/O (see ht_transport.c). */
+
     ht_sync_proto_bases(base);
     htDbgPut("L_OpenLibs: dos.library ok");
     htDbgPut("L_OpenLibs: success");
@@ -130,10 +136,7 @@ L_CloseLibs(VOID)
     }
 #endif
 
-    if (HttpBase->ahb_SocketBase != NULL) {
-        CloseLibrary(HttpBase->ahb_SocketBase);
-        HttpBase->ahb_SocketBase = NULL;
-    }
+    ht_transport_task_bsd_shutdown(HttpBase);
 
     if (HttpBase->ahb_DOSBase != NULL) {
         CloseLibrary(HttpBase->ahb_DOSBase);

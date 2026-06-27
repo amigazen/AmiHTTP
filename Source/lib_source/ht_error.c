@@ -18,6 +18,7 @@ VOID
 ht_lvo_bind(struct AmiHttpBase *base)
 {
     HttpBase = base;
+    ht_sync_proto_bases(base);
 }
 
 VOID

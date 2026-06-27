@@ -144,6 +144,10 @@ APTR FuncTab[] = {
     (APTR)HttpJoinUri,
     (APTR)HttpTransactionGetPeerCert,
     (APTR)HttpPeerCertFree,
+    (APTR)HttpTransactionRespHeaderNext,
+    (APTR)HttpTransactionRespHeaderByIndex,
+    (APTR)NewHttpCookieJarTags,
+    (APTR)HttpTransactionGetCipher,
     (APTR)((LONG)-1)
 };
 
@@ -189,6 +193,11 @@ __ASM__ __SAVE_DS__ InitLib(
     InitSemaphore(&base->ahb_PoolSema);
     InitSemaphore(&base->ahb_SocketSema);
     base->ahb_SslGlobalOpen = FALSE;
+    base->ahb_SocketErrno = 0;
+    base->ahb_SocketConfigured = FALSE;
+    if (base->ahb_ErrnoPtr == NULL) {
+        base->ahb_ErrnoPtr = (APTR)&base->ahb_SocketErrno;
+    }
 
     htDbgPut("InitLib: success");
     return base;
@@ -206,6 +215,7 @@ __ASM__ __SAVE_DS__ OpenLib(__REG__(a6, struct AmiHttpBase *base))
     base->ahb_LibNode.lib_Flags &= ~LIBF_DELEXP;
     /* Clear stale IoErr-style state from a previous client open. */
     base->ahb_LastError = 0;
+    ht_sync_proto_bases(base);
     return base;
 }
 
@@ -219,11 +229,11 @@ __ASM__ __SAVE_DS__ CloseLib(__REG__(a6, struct AmiHttpBase *base))
             return ExpungeLib(base);
         }
         /*
-         * Drop idle keep-alive sockets only.  Do not CloseAmiSSL here — the
-         * library segment stays resident and the next OpenLibrary must find
-         * AmiSSL/task TLS state consistent (full teardown is ExpungeLib).
+         * Last CloseLibrary: drop all sockets, per-task TLS, and global AmiSSL
+         * state.  OpenLibrary() again reinits lazily on the next fetch.
+         * ExpungeLib still frees the base segment and closes wrapped libs.
          */
-        ht_pool_flush(base);
+        ht_pool_shutdown(base);
     }
 
     return 0;

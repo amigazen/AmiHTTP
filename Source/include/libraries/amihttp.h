@@ -84,6 +84,15 @@ struct ParsedUrl;
 #define HTBT_HTTP2_ENABLED          (TAG_USER + 0x0A)  /* reserved, v2 */
 /* PEM CA bundle for VERIFY_PEER when using amitls (mirrors ATBT_CA_BUNDLE_PATH). */
 #define HTBT_CA_BUNDLE_PATH         (TAG_USER + 0x0B)
+/* Per-task bsdsocket handle (AWeb Opentcp); pair with HTBT_TASK_SOCKET_RELEASE. */
+#define HTBT_TASK_SOCKETBASE        (TAG_USER + 0x0C)
+#define HTBT_TASK_SOCKET_RELEASE    (TAG_USER + 0x0D)
+/* Drop per-task AmiSSL state for the calling Exec task (pair with SOCKET_RELEASE). */
+#define HTBT_TASK_SSL_RELEASE       (TAG_USER + 0x0E)
+/* Return ht_alloc/ht_strdup pointer to the library pool (e.g. after HttpJoinUri). */
+#define HTBT_FREE_POOL_MEM          (TAG_USER + 0x0F)
+/* Close idle pooled keep-alive connections (AWeb CloseIdleKeepAliveConnections). */
+#define HTBT_POOL_FLUSH             (TAG_USER + 0x10)
 
 /****************************************************************************/
 /* SetHttpSessionAttrsA tags (Tier 1)                                         */
@@ -151,10 +160,11 @@ struct ParsedUrl;
 /*   loops ReadBody until it returns 0. Caller supplies the buffer each call;  */
 /*   the library never requires the full entity in RAM. Chunked/gzip decode    */
 /*   is applied inside ReadBody when negotiated.                               */
-/* STRPTR lifetime: HttpTransactionGetStatusLine(), HttpTransactionRespHeader */
-/*   (), HttpTransactionGetRedirectLocation(), and nodes from                  */
-/*   HttpTransactionRespHeaders() point at library-owned storage valid until     */
-/*   DisposeHttpTransaction(). Do not FreeVec() these pointers.               */
+/* STRPTR lifetime: HttpTransactionGetStatusLine(), HttpTransactionRespHeader(), */
+/*   HttpTransactionRespHeaderNext(), HttpTransactionRespHeaderByIndex(),        */
+/*   HttpTransactionGetRedirectLocation() point at library-owned storage valid   */
+/*   until DisposeHttpTransaction(). Do not FreeVec() these pointers.            */
+/*   HttpTransactionRespHeaders() returns an internal list — do not walk nodes. */
 /* Async: HttpTransactionPerformAsync requires HTTA_NOTIFY_TASK and            */
 /*   HTTA_NOTIFY_SIGNAL; work runs on an internal worker task. WaitHttpTransaction */
 /*   waits on the notify signal (or polls if unset).                           */
@@ -253,6 +263,27 @@ struct HttpHookPostStream
 };
 
 /*
+ * NewHttpCookieJarTags — HTCJ_REQUEST_HOOK / HTCJ_RESPONSE_HOOK.
+ * When either hook is set the jar does not store cookies internally; the
+ * application owns policy and persistence (AWeb cookie.c).
+ */
+struct HttpHookCookieRequest
+{
+    struct HttpTransaction *hcr_Transaction;
+    STRPTR                  hcr_Url;
+    BOOL                    hcr_Secure;
+    STRPTR                  hcr_Value;      /* OUT: "n=v; n2=v2" without Cookie: */
+};
+
+struct HttpHookCookieResponse
+{
+    struct HttpTransaction *hcs_Transaction;
+    STRPTR                  hcs_Url;
+    STRPTR                  hcs_SetCookieLine; /* value after Set-Cookie: */
+    STRPTR                  hcs_DateHeader;    /* raw Date field-value or NULL */
+};
+
+/*
  * HTTA_FORM_MULTIPART — struct List of HttpFormPart nodes (multipart body).
  */
 struct HttpFormPart
@@ -327,6 +358,13 @@ struct HttpHeader
 };
 
 /****************************************************************************/
+/* NewHttpCookieJarTags tags                                                  */
+/****************************************************************************/
+
+#define HTCJ_REQUEST_HOOK           (TAG_USER + 0x400)
+#define HTCJ_RESPONSE_HOOK          (TAG_USER + 0x401)
+
+/****************************************************************************/
 /* HttpQueryPair - node for HttpBuildQueryString()                            */
 /****************************************************************************/
 
@@ -338,8 +376,8 @@ struct HttpQueryPair
 };
 
 /****************************************************************************/
-/* HttpBaseTags / SetHttpSessionAttrs / SetHttpTransactionAttrs are provided */
-/* as static inline wrappers in <proto/amihttp.h> (include after this file). */
+/* HttpBaseTags / SetHttpSessionAttrs / SetHttpTransactionAttrs /             */
+/* HttpCookieJarTags are static inline wrappers in <proto/amihttp.h>.         */
 /****************************************************************************/
 
 #endif /* LIBRARIES_AMIHTTP_H */

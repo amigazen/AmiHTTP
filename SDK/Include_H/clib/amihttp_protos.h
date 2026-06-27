@@ -43,12 +43,15 @@ VOID AbortHttpTransaction( struct HttpTransaction *txn );
 LONG HttpTransactionGetStatusCode( struct HttpTransaction *txn );
 STRPTR HttpTransactionGetStatusLine( struct HttpTransaction *txn );
 STRPTR HttpTransactionRespHeader( struct HttpTransaction *txn, STRPTR header_name );
+STRPTR HttpTransactionRespHeaderNext( struct HttpTransaction *txn, STRPTR header_name, STRPTR prev_value );
+BOOL HttpTransactionRespHeaderByIndex( struct HttpTransaction *txn, ULONG index, STRPTR *name_out, STRPTR *value_out );
 struct List *HttpTransactionRespHeaders( struct HttpTransaction *txn );
 LONG HttpTransactionReadBody( struct HttpTransaction *txn, APTR buffer, ULONG buflen );
 STRPTR HttpTransactionGetRedirectLocation( struct HttpTransaction *txn );
 LONG HttpTransactionGetContentLength( struct HttpTransaction *txn );
 ULONG HttpTransactionGetBytesReceived( struct HttpTransaction *txn );
 LONG HttpTransactionGetTiming( struct HttpTransaction *txn, struct HttpTiming *timing );
+LONG HttpTransactionGetCipher( struct HttpTransaction *txn, STRPTR buf, ULONG buflen );
 LONG HttpTransactionGetLastError( struct HttpTransaction *txn );
 LONG SetHttpTransactionHook( struct HttpTransaction *txn, ULONG type, struct Hook *hook );
 
@@ -77,6 +80,7 @@ STRPTR HttpPathEncode( STRPTR path );
 STRPTR HttpBuildQueryString( struct List *pairs );
 
 struct HttpCookieJar *NewHttpCookieJar( VOID );
+struct HttpCookieJar *NewHttpCookieJarTags( struct TagItem *tags );
 VOID DisposeHttpCookieJar( struct HttpCookieJar *jar );
 LONG LoadHttpCookieJar( struct HttpCookieJar *jar, STRPTR filename );
 LONG SaveHttpCookieJar( struct HttpCookieJar *jar, STRPTR filename );

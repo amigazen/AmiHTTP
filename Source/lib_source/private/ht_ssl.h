@@ -41,10 +41,13 @@ struct HtSsl
     STRPTR                hs_CertNotAfter;
     STRPTR                hs_CertSerial;
     LONG                  hs_CertVerifyResult;
+    LONG                  hs_LastTlsError;
+    STRPTR                hs_Cipher;
 };
 
 VOID ht_ssl_peer_cert_free(struct HtSsl *s);
 VOID ht_ssl_peer_cert_copy(struct HttpSslPeerCert *dst, struct HtSsl *s);
 VOID ht_ssl_peer_cert_clear(struct HtSsl *s);
+STRPTR ht_ssl_cipher_dup(struct HtSsl *s);
 
 #endif /* AMIHTTP_PRIVATE_HT_SSL_H */

@@ -85,5 +85,9 @@
 #pragma libcall HttpBase HttpJoinUri                    1b6 9802
 #pragma libcall HttpBase HttpTransactionGetPeerCert     1bc 9802
 #pragma libcall HttpBase HttpPeerCertFree               1c2 801
+#pragma libcall HttpBase HttpTransactionRespHeaderNext  1c8 A9803
+#pragma libcall HttpBase HttpTransactionRespHeaderByIndex 1ce 08004
+#pragma libcall HttpBase NewHttpCookieJarTags           1d4 801
+#pragma libcall HttpBase HttpTransactionGetCipher       1da 09803
 
 #endif /* PRAGMAS_AMIHTTP_H */

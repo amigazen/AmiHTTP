@@ -99,10 +99,14 @@ ht_ssl_base_verify(struct AmiHttpBase *base)
 static BOOL
 ht_ssl_tls_ok(LONG rc)
 {
-    if (rc > 0 && rc < ERROR_TLS_NOT_IMPLEMENTED) {
-        return TRUE;
+    /*
+     * TlsWrite/TlsRead success is a byte count below amihttp/amitls error
+     * ranges (8700+ / 8800+).  Mapped ERROR_HTTP_* must not look like I/O.
+     */
+    if (rc <= 0 || rc >= (LONG)ERROR_HTTP_NOT_IMPLEMENTED) {
+        return FALSE;
     }
-    return FALSE;
+    return TRUE;
 }
 
 static BOOL
@@ -148,11 +152,11 @@ ht_ssl_wait_socket(struct AmiHttpBase *base, LONG sock, BOOL want_write,
     LONG nfds;
     LONG rc;
 
-    if (sock < 0) {
+    if (base == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
     }
-    if (base != NULL) {
-        ht_sync_proto_bases(base);
+    if (sock < 0) {
+        return ERROR_HTTP_INVALID_HANDLE;
     }
     FD_ZERO(&rfds);
     FD_ZERO(&wfds);
@@ -163,14 +167,25 @@ ht_ssl_wait_socket(struct AmiHttpBase *base, LONG sock, BOOL want_write,
     }
     nfds = sock + 1;
     if (timeout_secs == 0) {
-        timeout_secs = 60;
+        timeout_secs = HT_SOCKET_IO_TIMEOUT;
     }
     tv.tv_sec = (long)timeout_secs;
     tv.tv_usec = 0;
+    /*
+     * Bind this task's bsdsocket handle before WaitSelect.  AWeb retrieve
+     * subprocesses share amihttp's global SocketBase; calling WaitSelect on
+     * another task's handle corrupts the TCP stack (hard lockup).  Hold
+     * ahb_SocketSema only for the select, not across TlsRead/TlsWrite.
+     */
+    rc = ht_io_obtain(base);
+    if (rc != 0) {
+        return ERROR_HTTP_READ_TIMEOUT;
+    }
     rc = WaitSelect((int)nfds,
         want_write ? NULL : &rfds,
         want_write ? &wfds : NULL,
         NULL, &tv, NULL);
+    ht_io_release(base);
     if (rc <= 0) {
         return ERROR_HTTP_READ_TIMEOUT;
     }
@@ -262,6 +277,7 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
 {
     struct HtTaskSsl *ts;
     struct Task *task;
+    struct Library *sockbase;
     APTR errp;
     LONG rc;
 
@@ -272,6 +288,10 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
     if (rc != 0) {
         return rc;
     }
+    sockbase = ht_task_current_socket_base(base);
+    if (sockbase == NULL) {
+        return ERROR_HTTP_CONNECT_FAILED;
+    }
     ht_ssl_task_list_init();
     task = FindTask(NULL);
     ObtainSemaphore(&ht_task_ssl_sema);
@@ -280,8 +300,8 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
          ts = (struct HtTaskSsl *)ts->ts_Node.ln_Succ) {
         if (ts->ts_Task == task) {
             ht_sync_proto_bases(base);
-            errp = base->ahb_ErrnoPtr != NULL ? base->ahb_ErrnoPtr : (APTR)&errno;
-            rc = TlsTaskAttach(base->ahb_SocketBase, errp);
+            errp = ht_task_errno_ptr(base);
+            rc = TlsTaskAttach(sockbase, errp);
             if (rc != 0) {
                 ReleaseSemaphore(&ht_task_ssl_sema);
                 return ht_ssl_map_tls_error(rc);
@@ -303,8 +323,8 @@ ht_transport_task_ssl_ensure(struct AmiHttpBase *base)
     ReleaseSemaphore(&ht_task_ssl_sema);
 
     ht_sync_proto_bases(base);
-    errp = base->ahb_ErrnoPtr != NULL ? base->ahb_ErrnoPtr : (APTR)&errno;
-    rc = TlsTaskAttach(base->ahb_SocketBase, errp);
+    errp = ht_task_errno_ptr(base);
+    rc = TlsTaskAttach(sockbase, errp);
     if (rc != 0) {
         ObtainSemaphore(&ht_task_ssl_sema);
         Remove(&ts->ts_Node);
@@ -353,36 +373,59 @@ ht_transport_task_ssl_release(struct AmiHttpBase *base)
 }
 
 VOID
-ht_transport_task_ssl_shutdown(struct AmiHttpBase *base)
+ht_ssl_release_task(struct AmiHttpBase *base)
 {
     struct HtTaskSsl *ts;
-    struct HtTaskSsl *next;
     struct Task *task;
-
-    (void)base;
+    BOOL init_ok;
 
     ht_ssl_task_list_init();
     task = FindTask(NULL);
     ObtainSemaphore(&ht_task_ssl_sema);
     for (ts = (struct HtTaskSsl *)ht_task_ssl_list.lh_Head;
          ts != NULL && ts->ts_Node.ln_Succ != NULL;
+         ts = (struct HtTaskSsl *)ts->ts_Node.ln_Succ) {
+        if (ts->ts_Task == task) {
+            init_ok = ts->ts_InitOk;
+            ts->ts_InitOk = FALSE;
+            ts->ts_RefCount = 0;
+            Remove(&ts->ts_Node);
+            ReleaseSemaphore(&ht_task_ssl_sema);
+            if (init_ok) {
+                TlsTaskDetach();
+            }
+            ht_free(ts);
+            if (base != NULL) {
+                ht_transport_bind_socket(base);
+            }
+            return;
+        }
+    }
+    ReleaseSemaphore(&ht_task_ssl_sema);
+}
+
+VOID
+ht_transport_task_ssl_shutdown(struct AmiHttpBase *base)
+{
+    struct HtTaskSsl *ts;
+    struct HtTaskSsl *next;
+
+    (void)base;
+
+    ht_ssl_task_list_init();
+    ObtainSemaphore(&ht_task_ssl_sema);
+    for (ts = (struct HtTaskSsl *)ht_task_ssl_list.lh_Head;
+         ts != NULL && ts->ts_Node.ln_Succ != NULL;
          ts = next) {
         next = (struct HtTaskSsl *)ts->ts_Node.ln_Succ;
-        if (ts->ts_Task == task && ts->ts_InitOk) {
-            while (ts->ts_RefCount > 0) {
-                TlsTaskDetach();
-                ts->ts_RefCount--;
-            }
-        }
         Remove(&ts->ts_Node);
+        ts->ts_InitOk = FALSE;
+        ts->ts_RefCount = 0;
         ReleaseSemaphore(&ht_task_ssl_sema);
         ht_free(ts);
         ObtainSemaphore(&ht_task_ssl_sema);
     }
     ReleaseSemaphore(&ht_task_ssl_sema);
-    if (base != NULL) {
-        ht_transport_bind_socket(base);
-    }
 }
 
 static VOID
@@ -446,6 +489,7 @@ ht_ssl_create(STRPTR hostname, STRPTR ca_bundle_path)
     }
     s->hs_Sock = -1;
     s->hs_HandshakeOk = FALSE;
+    s->hs_LastTlsError = 0;
     s->hs_Hostname = ht_strdup(hostname);
     if (ca_bundle_path != NULL && ca_bundle_path[0] != '\0') {
         s->hs_TlsCtx = NewTlsContext(NULL);
@@ -554,15 +598,25 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
         }
         return ht_ssl_map_tls_error(rc);
     }
+    /* Handshake completes on first TlsWrite, not TlsAttachSocket. */
     return 0;
+}
+
+VOID
+ht_ssl_capture_cipher(struct HtSsl *s)
+{
+    (void)s;
 }
 
 LONG
 ht_ssl_send(struct HtSsl *s, APTR data, ULONG len)
 {
     struct AmiHttpBase *base;
+    struct Library *sockbase;
+    APTR errp;
     LONG n;
     LONG err;
+    LONG rc;
     ULONG attempts;
 
     if (s == NULL || s->hs_TlsConn == NULL) {
@@ -571,6 +625,15 @@ ht_ssl_send(struct HtSsl *s, APTR data, ULONG len)
     base = HttpBase;
     if (base != NULL) {
         ht_sync_proto_bases(base);
+        sockbase = ht_task_current_socket_base(base);
+        if (sockbase != NULL) {
+            errp = ht_task_errno_ptr(base);
+            rc = TlsTaskAttach(sockbase, errp);
+            if (rc != 0) {
+                s->hs_LastTlsError = rc;
+                return ht_ssl_map_tls_error(rc);
+            }
+        }
     }
     attempts = 0;
     for (;;) {
@@ -592,32 +655,65 @@ ht_ssl_send(struct HtSsl *s, APTR data, ULONG len)
         }
         if (ht_ssl_tls_want(err)) {
             if (ht_ssl_wait_socket(base, s->hs_Sock,
-                (err == ERROR_TLS_WANT_WRITE) ? TRUE : FALSE, 60) != 0) {
+                (err == ERROR_TLS_WANT_WRITE) ? TRUE : FALSE,
+                HT_SOCKET_IO_TIMEOUT) != 0) {
                 return ERROR_HTTP_WRITE_FAILED;
             }
             continue;
         }
-        return ht_ssl_map_tls_error(err);
+        s->hs_LastTlsError = err;
+        rc = ht_ssl_map_tls_error(err);
+        if (!s->hs_HandshakeOk &&
+            (err == ERROR_TLS_VERIFY || rc == ERROR_HTTP_SSL_VERIFY)) {
+            s->hs_CertVerifyResult = err;
+            ht_ssl_capture_peer_cert(s);
+        }
+        return rc;
     }
+}
+
+LONG
+ht_ssl_last_tls_error(struct HtSsl *s)
+{
+    if (s == NULL) {
+        return 0;
+    }
+    return s->hs_LastTlsError;
 }
 
 LONG
 ht_ssl_recv(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     APTR buf, ULONG len, ULONG timeout_secs)
 {
+    struct Library *sockbase;
+    APTR errp;
     LONG n;
     LONG err;
+    LONG rc;
     ULONG attempts;
 
     if (s == NULL || s->hs_TlsConn == NULL || buf == NULL || len == 0) {
         return HT_IO_ERROR(ERROR_HTTP_INVALID_HANDLE);
     }
-    if (base != NULL) {
-        ht_sync_proto_bases(base);
+    if (base == NULL) {
+        return HT_IO_ERROR(ERROR_HTTP_INVALID_HANDLE);
+    }
+    ht_sync_proto_bases(base);
+    sockbase = ht_task_current_socket_base(base);
+    if (sockbase != NULL) {
+        errp = ht_task_errno_ptr(base);
+        rc = TlsTaskAttach(sockbase, errp);
+        if (rc != 0) {
+            return HT_IO_ERROR(ht_ssl_map_tls_error(rc));
+        }
     }
     if (sock < 0) {
         sock = s->hs_Sock;
     }
+    /*
+     * Do not hold ahb_SocketSema across TlsRead/WaitSelect (same rationale as
+     * ht_transport_send TLS path).  Parallel image fetches must not wedge here.
+     */
     attempts = 0;
     for (;;) {
         attempts++;

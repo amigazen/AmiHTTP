@@ -51,6 +51,10 @@ struct AmiHttpBase
     struct SignalSemaphore  ahb_SocketSema;
     BOOL                    ahb_SslGlobalOpen;
 
+    /* Shared bsdsocket handle; errno configured once in ht_bsd_open(). */
+    int                     ahb_SocketErrno;
+    BOOL                    ahb_SocketConfigured;
+
     /* Per-process defaults (HttpBaseTagList) */
     ULONG                   ahb_BreakMask;
     APTR                    ahb_ErrnoPtr;

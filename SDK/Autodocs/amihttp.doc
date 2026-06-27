@@ -50,7 +50,10 @@ amihttp.library/HttpTransactionPerform
 amihttp.library/HttpTransactionPerformAsync
 amihttp.library/HttpTransactionReadBody
 amihttp.library/HttpTransactionRespHeader
+amihttp.library/HttpTransactionRespHeaderNext
+amihttp.library/HttpTransactionRespHeaderByIndex
 amihttp.library/HttpTransactionRespHeaders
+amihttp.library/HttpTransactionGetCipher
 amihttp.library/HttpUriAuthorityPart
 amihttp.library/HttpUriFilePart
 amihttp.library/HttpUriHostPart
@@ -1054,7 +1057,68 @@ amihttp.library/WaitHttpTransaction
        list - struct List pointer, or NULL on bad handle.
 
    SEE ALSO
-       HttpTransactionRespHeader(), <libraries/amihttp.h> struct HttpHeader
+       HttpTransactionRespHeader(), HttpTransactionRespHeaderNext(),
+       HttpTransactionRespHeaderByIndex()
+
+amihttp.library/HttpTransactionRespHeaderNext
+                                  amihttp.library/HttpTransactionRespHeaderNext
+
+   NAME
+       HttpTransactionRespHeaderNext -- Next duplicate response header.  (V1)
+
+   SYNOPSIS
+       value = HttpTransactionRespHeaderNext(txn, name, prev);
+       D0                                        A0   A1   A2
+
+       STRPTR HttpTransactionRespHeaderNext(struct HttpTransaction *,
+           STRPTR, STRPTR);
+
+   FUNCTION
+       Returns the next field-value for name after prev_value.  Use
+       HttpTransactionRespHeader() for the first value, then loop with
+       prev set to each returned pointer until NULL.  Required for multiple
+       Set-Cookie lines without walking struct HttpHeader nodes.
+
+   INPUTS
+       txn  - HttpTransaction after Perform.
+       name - header name (case-insensitive).
+       prev - previous value from this name, or NULL for the first entry.
+
+   RESULT
+       value - next header value, or NULL when exhausted.
+
+   SEE ALSO
+       HttpTransactionRespHeader(), HttpTransactionRespHeaderByIndex()
+
+amihttp.library/HttpTransactionRespHeaderByIndex
+                                amihttp.library/HttpTransactionRespHeaderByIndex
+
+   NAME
+       HttpTransactionRespHeaderByIndex -- Enumerate response headers.  (V1)
+
+   SYNOPSIS
+       ok = HttpTransactionRespHeaderByIndex(txn, index, &name, &value);
+       D0                                           A0   D0    A1    A2
+
+       BOOL HttpTransactionRespHeaderByIndex(struct HttpTransaction *,
+           ULONG, STRPTR *, STRPTR *);
+
+   FUNCTION
+       Opaque iteration over all response header name/value pairs (index 0..n-1).
+       Preferred over HttpTransactionRespHeaders() for browser adapters that must
+       not walk internal struct List nodes.
+
+   INPUTS
+       txn      - HttpTransaction after Perform.
+       index    - zero-based header index.
+       name_out - receives header name pointer (library-owned).
+       value_out- receives header value pointer (library-owned).
+
+   RESULT
+       ok - TRUE when index valid, FALSE when done or on bad handle.
+
+   SEE ALSO
+       HttpTransactionRespHeader(), HttpTransactionRespHeaderNext()
 
 amihttp.library/HttpTransactionReadBody
                                       amihttp.library/HttpTransactionReadBody
@@ -1290,6 +1354,33 @@ amihttp.library/WaitHttpTransaction
 
    SEE ALSO
        HttpTransactionGetPeerCert()
+
+amihttp.library/HttpTransactionGetCipher     amihttp.library/HttpTransactionGetCipher
+
+   NAME
+       HttpTransactionGetCipher -- TLS cipher suite name.  (V1)
+
+   SYNOPSIS
+       len = HttpTransactionGetCipher(txn, buf, buflen);
+       D0                              A0   A1    D0
+
+       LONG HttpTransactionGetCipher(struct HttpTransaction *, STRPTR, ULONG);
+
+   FUNCTION
+       After HTTPS HttpTransactionPerform, copies the negotiated cipher suite
+       name into buf (NUL-terminated).  AmiSSL builds populate this; amitls
+       may return an empty string until cipher reporting is wired.
+
+   INPUTS
+       txn    - HttpTransaction handle.
+       buf    - caller buffer.
+       buflen - size of buf in bytes.
+
+   RESULT
+       len - length of cipher name copied, or 0 when unavailable.
+
+   SEE ALSO
+       HttpTransactionGetPeerCert(), HttpTransactionGetTiming()
 
 amihttp.library/OpenHttpConnection             amihttp.library/OpenHttpConnection
 
@@ -1953,7 +2044,42 @@ amihttp.library/WaitHttpTransaction
        jar - handle or NULL.
 
    SEE ALSO
-       DisposeHttpCookieJar(), HttpSessionAttachCookieJar()
+       DisposeHttpCookieJar(), HttpSessionAttachCookieJar(), NewHttpCookieJarTags()
+
+amihttp.library/NewHttpCookieJarTags         amihttp.library/NewHttpCookieJarTags
+
+   NAME
+       NewHttpCookieJarTags -- Cookie jar with application hooks.  (V1)
+
+   SYNOPSIS
+       jar = NewHttpCookieJarTags(tags);
+       D0                          A0
+
+       struct HttpCookieJar *NewHttpCookieJarTags(struct TagItem *tags);
+
+       jar = HttpCookieJarTags(Tag1, ...);
+
+   FUNCTION
+       Creates a cookie-store facade.  When HTCJ_REQUEST_HOOK and/or
+       HTCJ_RESPONSE_HOOK are set, cookies are delegated to the application
+       (e.g. AWeb cookie.c) instead of the internal jar list.
+
+       HTCJ_REQUEST_HOOK — struct HttpHookCookieRequest before send; hook
+       returns non-zero and sets hcr_Value to a Cookie header payload
+       (without the "Cookie:" prefix).
+
+       HTCJ_RESPONSE_HOOK — struct HttpHookCookieResponse once per Set-Cookie
+       line after response headers are parsed.
+
+   TAGS
+       HTCJ_REQUEST_HOOK  — struct Hook * for outbound cookies.
+       HTCJ_RESPONSE_HOOK — struct Hook * for inbound Set-Cookie lines.
+
+   RESULT
+       jar - handle or NULL.
+
+   SEE ALSO
+       NewHttpCookieJar(), HttpSessionAttachCookieJar(), struct HttpHookCookieRequest
 
 amihttp.library/DisposeHttpCookieJar         amihttp.library/DisposeHttpCookieJar
 

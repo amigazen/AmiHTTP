@@ -46,6 +46,7 @@ __ASM__ __SAVE_DS__ HttpBaseTagList(
             break;
         case HTBT_ERRNOPTR:
             HttpBase->ahb_ErrnoPtr = (APTR)t->ti_Data;
+            ht_bsd_set_errno_ptr(HttpBase);
             break;
         case HTBT_DEFAULT_USERAGENT:
             if (HttpBase->ahb_DefaultUserAgent) {
@@ -81,6 +82,23 @@ __ASM__ __SAVE_DS__ HttpBaseTagList(
                 ht_ssl_sync_base_tags(HttpBase);
             }
 #endif
+            break;
+        case HTBT_TASK_SOCKETBASE:
+            return ht_lvo_status(ht_transport_task_bsd_bind(
+                HttpBase, (struct Library *)t->ti_Data));
+        case HTBT_TASK_SOCKET_RELEASE:
+            ht_bsd_release_task(HttpBase);
+            break;
+        case HTBT_TASK_SSL_RELEASE:
+            ht_ssl_release_task(HttpBase);
+            break;
+        case HTBT_FREE_POOL_MEM:
+            if (t->ti_Data != 0) {
+                ht_free((APTR)t->ti_Data);
+            }
+            break;
+        case HTBT_POOL_FLUSH:
+            ht_pool_flush(HttpBase);
             break;
         case HTBT_DEFAULT_TIMEOUT:
             HttpBase->ahb_DefaultTimeout = (ULONG)t->ti_Data;

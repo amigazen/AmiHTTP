@@ -26,8 +26,10 @@ LONG __ASM__ __SAVE_DS__ HttpSessionAttachCookieJar(__REG__(a0, struct HttpSessi
 VOID __ASM__ __SAVE_DS__ HttpSessionDetachCookieJar(__REG__(a0, struct HttpSession *session));
 LONG __ASM__ __SAVE_DS__ SetHttpSessionHook(__REG__(a0, struct HttpSession *session), __REG__(d0, ULONG type), __REG__(a1, struct Hook *hook));
 
-struct HttpTransaction *__ASM__ __SAVE_DS__ NewHttpTransaction(__REG__(a0, struct HttpSession *session));
-VOID __ASM__ __SAVE_DS__ DisposeHttpTransaction(__REG__(a0, struct HttpTransaction *txn));
+struct HttpTransaction *__ASM__ __SAVE_DS__ NewHttpTransaction(__REG__(a0, struct HttpSession *session),
+    __REG__(a6, struct AmiHttpBase *libbase));
+VOID __ASM__ __SAVE_DS__ DisposeHttpTransaction(__REG__(a0, struct HttpTransaction *txn),
+    __REG__(a6, struct AmiHttpBase *libbase));
 LONG __ASM__ __SAVE_DS__ SetHttpTransactionAttrsA(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, struct TagItem *tags));
 LONG __ASM__ __SAVE_DS__ HttpTransactionAddHeader(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, STRPTR hdr_name), __REG__(a2, STRPTR value));
 VOID __ASM__ __SAVE_DS__ HttpTransactionClearHeaders(__REG__(a0, struct HttpTransaction *txn));
@@ -41,12 +43,16 @@ VOID __ASM__ __SAVE_DS__ AbortHttpTransaction(__REG__(a0, struct HttpTransaction
 LONG __ASM__ __SAVE_DS__ HttpTransactionGetStatusCode(__REG__(a0, struct HttpTransaction *txn));
 STRPTR __ASM__ __SAVE_DS__ HttpTransactionGetStatusLine(__REG__(a0, struct HttpTransaction *txn));
 STRPTR __ASM__ __SAVE_DS__ HttpTransactionRespHeader(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, STRPTR header_name));
+STRPTR __ASM__ __SAVE_DS__ HttpTransactionRespHeaderNext(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, STRPTR header_name), __REG__(a2, STRPTR prev_value));
+BOOL __ASM__ __SAVE_DS__ HttpTransactionRespHeaderByIndex(__REG__(a0, struct HttpTransaction *txn), __REG__(d0, ULONG index), __REG__(a1, STRPTR *name_out), __REG__(a2, STRPTR *value_out));
 struct List *__ASM__ __SAVE_DS__ HttpTransactionRespHeaders(__REG__(a0, struct HttpTransaction *txn));
-LONG __ASM__ __SAVE_DS__ HttpTransactionReadBody(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, APTR buffer), __REG__(d0, ULONG buflen));
+LONG __ASM__ __SAVE_DS__ HttpTransactionReadBody(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, APTR buffer), __REG__(d0, ULONG buflen),
+    __REG__(a6, struct AmiHttpBase *libbase));
 STRPTR __ASM__ __SAVE_DS__ HttpTransactionGetRedirectLocation(__REG__(a0, struct HttpTransaction *txn));
 LONG __ASM__ __SAVE_DS__ HttpTransactionGetContentLength(__REG__(a0, struct HttpTransaction *txn));
 ULONG __ASM__ __SAVE_DS__ HttpTransactionGetBytesReceived(__REG__(a0, struct HttpTransaction *txn));
 LONG __ASM__ __SAVE_DS__ HttpTransactionGetTiming(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, struct HttpTiming *timing));
+LONG __ASM__ __SAVE_DS__ HttpTransactionGetCipher(__REG__(a0, struct HttpTransaction *txn), __REG__(a1, STRPTR buf), __REG__(d0, ULONG buflen));
 LONG __ASM__ __SAVE_DS__ HttpTransactionGetLastError(__REG__(a0, struct HttpTransaction *txn));
 LONG __ASM__ __SAVE_DS__ SetHttpTransactionHook(__REG__(a0, struct HttpTransaction *txn), __REG__(d0, ULONG type), __REG__(a1, struct Hook *hook));
 
@@ -75,6 +81,7 @@ STRPTR __ASM__ __SAVE_DS__ HttpPathEncode(__REG__(a0, STRPTR path));
 STRPTR __ASM__ __SAVE_DS__ HttpBuildQueryString(__REG__(a0, struct List *pairs));
 
 struct HttpCookieJar *__ASM__ __SAVE_DS__ NewHttpCookieJar(void);
+struct HttpCookieJar *__ASM__ __SAVE_DS__ NewHttpCookieJarTags(__REG__(a0, struct TagItem *tags));
 VOID __ASM__ __SAVE_DS__ DisposeHttpCookieJar(__REG__(a0, struct HttpCookieJar *jar));
 LONG __ASM__ __SAVE_DS__ LoadHttpCookieJar(__REG__(a0, struct HttpCookieJar *jar), __REG__(a1, STRPTR filename));
 LONG __ASM__ __SAVE_DS__ SaveHttpCookieJar(__REG__(a0, struct HttpCookieJar *jar), __REG__(a1, STRPTR filename));

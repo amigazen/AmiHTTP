@@ -10,6 +10,7 @@
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <exec/lists.h>
+#include <exec/tasks.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -281,8 +282,6 @@ ht_txn_user_agent(struct HttpTransaction *txn)
  * Build multipart/form-data body from HTTA_FORM_MULTIPART list when set.
  * Length-tracked assembly so binary part payloads may contain NUL bytes.
  */
-static ULONG ht_multipart_serial;
-
 static LONG
 ht_multipart_append(UBYTE *buf, ULONG cap, ULONG *pos,
     const void *data, ULONG len)
@@ -329,8 +328,7 @@ ht_http_prepare_multipart(struct HttpTransaction *txn)
     if (txn->ht_MultipartBody != NULL) {
         return 0;
     }
-    ht_multipart_serial++;
-    sprintf(bound, "----AmiHttp%08lx", ht_multipart_serial);
+    sprintf(bound, "----AmiHttp%08lx%08lx", (ULONG)txn, (ULONG)FindTask(NULL));
     if (txn->ht_MultipartBoundary) {
         ht_free(txn->ht_MultipartBoundary);
     }
@@ -601,14 +599,28 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
         strcat((char *)buf, "Pragma: no-cache\r\n");
     }
     if (txn->ht_Session != NULL && txn->ht_Session->hs_CookieJar != NULL) {
-        cookie_hdr = ht_cookie_header_for_url(txn->ht_Session->hs_CookieJar,
-            txn->ht_Url, pu.pu_IsSecure);
-        if (cookie_hdr != NULL && cookie_hdr[0] != '\0') {
-            sprintf((char *)line, "Cookie: %s\r\n", cookie_hdr);
-            strcat((char *)buf, line);
-        }
-        if (cookie_hdr != NULL) {
-            ht_free(cookie_hdr);
+        struct HttpCookieJar *jar;
+        ULONG room;
+
+        jar = txn->ht_Session->hs_CookieJar;
+        room = HT_REQBUF_MAX - (ULONG)strlen((char *)buf);
+        if (jar->hj_RequestHook != NULL) {
+            rc = ht_cookie_append_request(jar, txn, pu.pu_IsSecure,
+                (STRPTR)buf, room);
+            if (rc != 0) {
+                ht_url_free_fields(&pu);
+                return rc;
+            }
+        } else if (jar->hj_ResponseHook == NULL) {
+            cookie_hdr = ht_cookie_header_for_url(jar,
+                txn->ht_Url, pu.pu_IsSecure);
+            if (cookie_hdr != NULL && cookie_hdr[0] != '\0') {
+                sprintf((char *)line, "Cookie: %s\r\n", cookie_hdr);
+                strcat((char *)buf, line);
+            }
+            if (cookie_hdr != NULL) {
+                ht_free(cookie_hdr);
+            }
         }
     }
     if (txn->ht_BasicAuth != NULL && txn->ht_BasicAuth[0] != '\0') {
@@ -682,7 +694,17 @@ ht_http_send_request(struct AmiHttpBase *base, struct HttpTransaction *txn)
     rc = ht_transport_send(base, txn->ht_Conn, req, reqlen);
     ht_free(req);
     if (rc < 0) {
+        return ht_wire_to_status(rc);
+    }
+    if (rc == ERROR_HTTP_SSL_VERIFY && txn->ht_Conn != NULL &&
+        txn->ht_Conn->hc_SslCtx != NULL) {
+        (void)ht_ssl_cert_hook_accept(txn, txn->ht_Conn->hc_SslCtx);
+    }
+    if (rc >= (LONG)ERROR_HTTP_NOT_IMPLEMENTED) {
         return rc;
+    }
+    if (txn->ht_Conn != NULL && txn->ht_Conn->hc_IsSsl) {
+        ht_transport_apply_io_timeouts(base, txn->ht_Conn);
     }
     if (txn->ht_PostStreamHook != NULL && txn->ht_PostLength > 0) {
         return ht_http_send_stream_body(base, txn);
@@ -1667,6 +1689,9 @@ ht_http_read_body(struct AmiHttpBase *base, struct HttpTransaction *txn,
     if (txn == NULL) {
         ht_set_error(ERROR_HTTP_INVALID_HANDLE);
         return 0;
+    }
+    if (base != NULL) {
+        ht_sync_proto_bases(base);
     }
     if (txn->ht_NoBody) {
         ht_set_error(0);

@@ -44,6 +44,7 @@
 #define HT_REQBUF_MAX       262144
 #define HT_POOL_TIMEOUT     15
 #define HT_POOL_MAX_IDLE    8
+#define HT_SOCKET_IO_TIMEOUT  15UL
 
 #define HTF_KEEPALIVE_REQ   0x0001
 #define HTF_KEEPALIVE       0x0002
@@ -245,6 +246,7 @@ struct HttpTransaction
     STRPTR              ht_CertNotAfter;
     STRPTR              ht_CertSerial;
     LONG                ht_CertVerifyResult;
+    STRPTR              ht_Cipher;
 };
 
 struct HttpCookieJar
@@ -252,6 +254,8 @@ struct HttpCookieJar
     ULONG               hj_Magic;
     struct List         hj_Cookies;
     struct SignalSemaphore hj_Sema;
+    struct Hook        *hj_RequestHook;
+    struct Hook        *hj_ResponseHook;
 };
 
 /*
@@ -276,12 +280,23 @@ LONG ht_lvo_status(LONG rc);
 LONG ht_wire_to_status(LONG n);
 
 /* ht_transport.c */
+LONG ht_bsd_open(struct AmiHttpBase *base);
+VOID ht_bsd_close(struct AmiHttpBase *base);
+VOID ht_bsd_set_errno_ptr(struct AmiHttpBase *base);
 LONG ht_ensure_bsdsocket(struct AmiHttpBase *base);
 VOID ht_transport_bind_socket(struct AmiHttpBase *base);
-LONG ht_transport_global_init(struct AmiHttpBase *base);
+LONG ht_io_obtain(struct AmiHttpBase *base);
+VOID ht_io_release(struct AmiHttpBase *base);
+LONG ht_transport_task_bsd_bind(struct AmiHttpBase *base, struct Library *socketbase);
+APTR ht_task_errno_ptr(struct AmiHttpBase *base);
+struct Library *ht_task_current_socket_base(struct AmiHttpBase *base);
+VOID ht_transport_apply_io_timeouts(struct AmiHttpBase *base, struct HtConnection *conn);
+VOID ht_bsd_release_task(struct AmiHttpBase *base);
+VOID ht_transport_task_bsd_shutdown(struct AmiHttpBase *base);
 VOID ht_transport_global_shutdown(struct AmiHttpBase *base);
 LONG ht_transport_task_ssl_ensure(struct AmiHttpBase *base);
 VOID ht_transport_task_ssl_release(struct AmiHttpBase *base);
+VOID ht_ssl_release_task(struct AmiHttpBase *base);
 VOID ht_transport_task_ssl_shutdown(struct AmiHttpBase *base);
 LONG ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
     STRPTR host, ULONG port, BOOL ssl, ULONG timeout_secs, ULONG ssl_verify,
@@ -314,6 +329,10 @@ VOID ht_ssl_close(struct HtSsl *s);
 VOID ht_ssl_capture_peer_cert(struct HtSsl *s);
 VOID ht_ssl_peer_cert_copy(struct HttpSslPeerCert *dst, struct HtSsl *s);
 VOID ht_ssl_peer_cert_clear(struct HtSsl *s);
+STRPTR ht_ssl_cipher_dup(struct HtSsl *s);
+VOID ht_ssl_capture_cipher(struct HtSsl *s);
+LONG ht_ssl_last_tls_error(struct HtSsl *s);
+BOOL ht_ssl_cert_hook_accept(struct HttpTransaction *txn, struct HtSsl *s);
 
 /* ht_proxy.c */
 LONG ht_route_resolve(struct AmiHttpBase *base, struct HttpSession *session,
@@ -363,6 +382,10 @@ LONG ht_cookie_store_line(struct HttpCookieJar *jar, STRPTR url, STRPTR spec,
 STRPTR ht_cookie_header_for_url(struct HttpCookieJar *jar, STRPTR url,
     BOOL secure);
 VOID ht_cookie_ingest_headers(struct HttpCookieJar *jar,
+    struct HttpTransaction *txn);
+LONG ht_cookie_append_request(struct HttpCookieJar *jar,
+    struct HttpTransaction *txn, BOOL secure, STRPTR buf, ULONG buflen);
+VOID ht_cookie_dispatch_response(struct HttpCookieJar *jar,
     struct HttpTransaction *txn);
 
 /* ht_http.c */

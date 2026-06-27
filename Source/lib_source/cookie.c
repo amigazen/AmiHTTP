@@ -15,14 +15,16 @@
 
 #include <proto/exec.h>
 
+#include <utility/tagitem.h>
+
 #include <libraries/amihttp.h>
 
 #include "compiler.h"
 #include "amihttp_funcs.h"
 #include "private/ht_internal.h"
 
-struct HttpCookieJar *
-__ASM__ __SAVE_DS__ NewHttpCookieJar(void)
+static struct HttpCookieJar *
+ht_cookie_jar_new(void)
 {
     struct HttpCookieJar *jar;
 
@@ -35,6 +37,40 @@ __ASM__ __SAVE_DS__ NewHttpCookieJar(void)
     NewList(&jar->hj_Cookies);
     InitSemaphore(&jar->hj_Sema);
     ht_set_error(0);
+    return jar;
+}
+
+struct HttpCookieJar *
+__ASM__ __SAVE_DS__ NewHttpCookieJar(void)
+{
+    return ht_cookie_jar_new();
+}
+
+struct HttpCookieJar *
+__ASM__ __SAVE_DS__ NewHttpCookieJarTags(
+    __REG__(a0, struct TagItem *tags))
+{
+    struct HttpCookieJar *jar;
+    struct TagItem *t;
+
+    jar = ht_cookie_jar_new();
+    if (jar == NULL) {
+        return NULL;
+    }
+    if (tags != NULL) {
+        for (t = tags; t->ti_Tag != TAG_DONE; t++) {
+            switch (t->ti_Tag) {
+            case HTCJ_REQUEST_HOOK:
+                jar->hj_RequestHook = (struct Hook *)t->ti_Data;
+                break;
+            case HTCJ_RESPONSE_HOOK:
+                jar->hj_ResponseHook = (struct Hook *)t->ti_Data;
+                break;
+            default:
+                break;
+            }
+        }
+    }
     return jar;
 }
 
@@ -98,6 +134,9 @@ __ASM__ __SAVE_DS__ SetHttpCookie(
     if (cookie_line == NULL || cookie_line[0] == '\0') {
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
     }
+    if (jar->hj_RequestHook != NULL || jar->hj_ResponseHook != NULL) {
+        return ht_lvo_status(ERROR_HTTP_NOT_IMPLEMENTED);
+    }
     return ht_lvo_status(ht_cookie_store_line(jar, NULL, cookie_line, FALSE));
 }
 
@@ -112,6 +151,9 @@ __ASM__ __SAVE_DS__ GetHttpCookieString(
 
     if (!ht_check_handle(jar ? jar->hj_Magic : 0, HT_MAGIC_JAR)) {
         return NULL;
+    }
+    if (jar->hj_RequestHook != NULL || jar->hj_ResponseHook != NULL) {
+        return ht_strdup((STRPTR)"");
     }
     if (url == NULL) {
         return ht_strdup((STRPTR)"");

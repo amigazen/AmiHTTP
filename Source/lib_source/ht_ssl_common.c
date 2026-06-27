@@ -9,6 +9,7 @@
 #include <libraries/amihttp.h>
 
 #include "private/ht_internal.h"
+#include "private/ht_hooks.h"
 #include "private/ht_ssl.h"
 
 VOID
@@ -35,6 +36,9 @@ ht_ssl_peer_cert_free(struct HtSsl *s)
     if (s->hs_CertSerial) {
         ht_free(s->hs_CertSerial);
     }
+    if (s->hs_Cipher) {
+        ht_free(s->hs_Cipher);
+    }
     s->hs_CertSubject = NULL;
     s->hs_CertIssuer = NULL;
     s->hs_CertCommonName = NULL;
@@ -43,6 +47,7 @@ ht_ssl_peer_cert_free(struct HtSsl *s)
     s->hs_CertSerial = NULL;
     s->hs_CertPresent = FALSE;
     s->hs_CertVerifyResult = 0;
+    s->hs_Cipher = NULL;
 }
 
 VOID
@@ -86,4 +91,41 @@ VOID
 ht_ssl_peer_cert_clear(struct HtSsl *s)
 {
     ht_ssl_peer_cert_free(s);
+}
+
+STRPTR
+ht_ssl_cipher_dup(struct HtSsl *s)
+{
+    if (s == NULL || s->hs_Cipher == NULL || s->hs_Cipher[0] == '\0') {
+        return NULL;
+    }
+    return ht_strdup(s->hs_Cipher);
+}
+
+/*
+ * BearSSL deferred handshake: cert verify may fail on first TlsWrite() rather
+ * than TlsAttachSocket().  Invoke HTHK_CERT_VERIFY and mark the session OK if
+ * the hook accepts the peer certificate.
+ */
+BOOL
+ht_ssl_cert_hook_accept(struct HttpTransaction *txn, struct HtSsl *s)
+{
+    LONG vr;
+
+    if (txn == NULL || s == NULL) {
+        return FALSE;
+    }
+    vr = ht_ssl_last_tls_error(s);
+    if (vr == 0) {
+        vr = s->hs_CertVerifyResult;
+    }
+    if (vr == 0) {
+        vr = ERROR_HTTP_SSL_VERIFY;
+    }
+    ht_ssl_capture_peer_cert(s);
+    if (ht_hook_cert_verify(txn, s, vr)) {
+        s->hs_HandshakeOk = TRUE;
+        return TRUE;
+    }
+    return FALSE;
 }

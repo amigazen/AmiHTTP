@@ -31,19 +31,28 @@
 
 extern struct Device *TimerBase;
 
-/* Lazy timer.device open for GetSysTime() */
+/* Lazy timer.device open for GetSysTime(); guarded for parallel pool scans. */
 static struct MsgPort *ht_timer_port;
 static struct timerequest *ht_timer_req;
 static BOOL ht_timer_open;
+static struct SignalSemaphore ht_timer_sema;
+static BOOL ht_timer_sema_inited;
 
 static BOOL
 ht_ensure_timer(void)
 {
+    if (!ht_timer_sema_inited) {
+        InitSemaphore(&ht_timer_sema);
+        ht_timer_sema_inited = TRUE;
+    }
+    ObtainSemaphore(&ht_timer_sema);
     if (ht_timer_open) {
+        ReleaseSemaphore(&ht_timer_sema);
         return TRUE;
     }
     ht_timer_port = CreateMsgPort();
     if (ht_timer_port == NULL) {
+        ReleaseSemaphore(&ht_timer_sema);
         return FALSE;
     }
     ht_timer_req = (struct timerequest *)CreateExtIO(
@@ -51,6 +60,7 @@ ht_ensure_timer(void)
     if (ht_timer_req == NULL) {
         DeleteMsgPort(ht_timer_port);
         ht_timer_port = NULL;
+        ReleaseSemaphore(&ht_timer_sema);
         return FALSE;
     }
     if (OpenDevice((STRPTR)TIMERNAME, (ULONG)UNIT_MICROHZ,
@@ -59,16 +69,22 @@ ht_ensure_timer(void)
         ht_timer_req = NULL;
         DeleteMsgPort(ht_timer_port);
         ht_timer_port = NULL;
+        ReleaseSemaphore(&ht_timer_sema);
         return FALSE;
     }
     TimerBase = ht_timer_req->tr_node.io_Device;
     ht_timer_open = TRUE;
+    ReleaseSemaphore(&ht_timer_sema);
     return TRUE;
 }
 
 VOID
 ht_timer_shutdown(VOID)
 {
+    if (!ht_timer_sema_inited) {
+        return;
+    }
+    ObtainSemaphore(&ht_timer_sema);
     if (ht_timer_req != NULL) {
         if (ht_timer_open) {
             CloseDevice((struct IORequest *)ht_timer_req);
@@ -82,6 +98,7 @@ ht_timer_shutdown(VOID)
     }
     TimerBase = NULL;
     ht_timer_open = FALSE;
+    ReleaseSemaphore(&ht_timer_sema);
 }
 
 static ULONG
@@ -265,7 +282,12 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
                 conn->hc_Host != NULL &&
                 ht_host_match(conn->hc_Host, route->hr_OriginHost)) {
                 if ((now - conn->hc_LastUsed) < idle_timeout) {
-                    if (ht_transport_conn_idle(base, conn)) {
+                    BOOL idle_ok;
+
+                    ReleaseSemaphore(&base->ahb_PoolSema);
+                    idle_ok = ht_transport_conn_idle(base, conn);
+                    ObtainSemaphore(&base->ahb_PoolSema);
+                    if (idle_ok) {
                         conn->hc_InUse = TRUE;
                         conn->hc_LastUsed = now;
                         conn->hc_IoLen = 0;
@@ -408,6 +430,7 @@ ht_pool_shutdown(struct AmiHttpBase *base)
         ht_connection_free(base, conn);
     }
     ReleaseSemaphore(&base->ahb_PoolSema);
+    ht_transport_task_bsd_shutdown(base);
     ht_transport_task_ssl_shutdown(base);
     ht_transport_global_shutdown(base);
     ht_timer_shutdown();
