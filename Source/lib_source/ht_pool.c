@@ -333,11 +333,16 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
                 if ((now - conn->hc_LastUsed) < idle_timeout) {
                     BOOL idle_ok;
 
+                    /*
+                     * Reserve before dropping ahb_PoolSema: parallel AWeb
+                     * Httptask subprocesses share one pool owner serial and
+                     * must not both select the same idle entry.
+                     */
+                    conn->hc_InUse = TRUE;
                     ReleaseSemaphore(&base->ahb_PoolSema);
                     idle_ok = ht_transport_conn_idle(base, conn);
                     ObtainSemaphore(&base->ahb_PoolSema);
                     if (idle_ok) {
-                        conn->hc_InUse = TRUE;
                         conn->hc_LastUsed = now;
                         conn->hc_IoLen = 0;
                         conn->hc_IoPos = 0;
@@ -352,6 +357,7 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
                         found = conn;
                         break;
                     }
+                    conn->hc_InUse = FALSE;
                 }
                 Remove(&conn->hc_Node);
                 conn->hc_DeadNext = dead;

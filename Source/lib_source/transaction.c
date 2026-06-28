@@ -390,12 +390,18 @@ ht_txn_perform_once(struct HttpTransaction *txn)
     }
     /*
      * Redirect hops close the socket without Readdata().
+     * When FollowRedirects is enabled, return the connection to the pool if
+     * keep-alive was negotiated so the next hop can reuse it (same host).
      * Final entity body stays on the open connection; HttpTransactionReadBody
      * drives Readdata() via hc_IoBuf (Readblock loop).
      */
     keepalive = FALSE;
     if (txn->ht_StatusCode >= 300 && txn->ht_StatusCode < 400) {
-        ht_pool_release(HttpBase, txn->ht_Conn, FALSE);
+        if (txn->ht_Session != NULL && txn->ht_Session->hs_FollowRedirects &&
+            (txn->ht_Flags & HTF_KEEPALIVE) && (txn->ht_Flags & HTF_KEEPALIVE_REQ)) {
+            keepalive = TRUE;
+        }
+        ht_pool_release(HttpBase, txn->ht_Conn, keepalive);
         txn->ht_Conn = NULL;
     } else if (txn->ht_NoBody || txn->ht_ContentLength == 0) {
         if (txn->ht_Session != NULL && txn->ht_Session->hs_KeepAlive &&
