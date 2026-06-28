@@ -1,5 +1,5 @@
 #
-# Examples/smakefile - build AGet test program
+# Examples/smakefile - build AGet and HttpStream example programs
 #
 # Prerequisite: install amihttp.library and headers (Source/lib_source smake install)
 #
@@ -8,23 +8,32 @@ CC      = sc
 LD      = slink
 RM      = delete force quiet
 
-TARGET  = AGet
+TARGETS = AGet HttpStream
 
-all: $(TARGET)
+all: $(TARGETS)
 
 rebuild: clean all
 
-$(TARGET): AGet.o libbases.o smakefile.wth
+AGet: AGet.o libbases.o smakefile.wth
 	$(LD) WITH smakefile.wth
+
+HttpStream: HttpStream.o libbases.o smakefile_stream.wth
+	$(LD) WITH smakefile_stream.wth
 
 AGet.o: AGet.c
 	$(CC) AGet.c to AGet.o
+
+HttpStream.o: HttpStream.c
+	$(CC) HttpStream.c to HttpStream.o
 
 libbases.o: libbases.c
 	$(CC) libbases.c to libbases.o
 
 clean:
 	-$(RM) AGet.o
+	-$(RM) HttpStream.o
 	-$(RM) libbases.o
-	-$(RM) $(TARGET)
-	-$(RM) $(TARGET).info
+	-$(RM) AGet
+	-$(RM) HttpStream
+	-$(RM) AGet.info
+	-$(RM) HttpStream.info
