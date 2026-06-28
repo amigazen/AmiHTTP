@@ -11,12 +11,9 @@
 #include <exec/memory.h>
 #include <exec/lists.h>
 #include <exec/tasks.h>
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #include <proto/exec.h>
+#include <proto/dos.h>
 #include <proto/utility.h>
 #include <proto/alib.h>
 #include <proto/z.h>
@@ -35,29 +32,56 @@
 
 extern struct AmiHttpBase *HttpBase;
 
-static int
-ht_str_ieq(STRPTR a, STRPTR b)
+static BOOL
+ht_has_token(STRPTR hay, CONST_STRPTR needle)
 {
-    char ca;
-    char cb;
+    STRPTR p;
+    ULONG nlen;
 
-    if (a == NULL || b == NULL) {
-        return 0;
+    if (hay == NULL || needle == NULL) {
+        return FALSE;
     }
-    while (*a != '\0' && *b != '\0') {
-        ca = *a++;
-        cb = *b++;
-        if (ca >= 'A' && ca <= 'Z') {
-            ca = (char)(ca + ('a' - 'A'));
-        }
-        if (cb >= 'A' && cb <= 'Z') {
-            cb = (char)(cb + ('a' - 'A'));
-        }
-        if (ca != cb) {
-            return 0;
+    nlen = 0;
+    while (needle[nlen] != '\0') {
+        nlen++;
+    }
+    if (nlen == 0) {
+        return FALSE;
+    }
+    for (p = hay; *p != '\0'; p++) {
+        if (Strnicmp(p, needle, (LONG)nlen) == 0) {
+            return TRUE;
         }
     }
-    return (*a == '\0' && *b == '\0');
+    return FALSE;
+}
+
+static LONG
+ht_parse_http_status(STRPTR line, LONG *code_out)
+{
+    STRPTR p;
+    LONG consumed;
+
+    if (line == NULL || code_out == NULL) {
+        return ERROR_HTTP_PROTOCOL;
+    }
+    *code_out = 0;
+    if (Strnicmp(line, (STRPTR)"HTTP/", 5) != 0) {
+        return ERROR_HTTP_PROTOCOL;
+    }
+    p = line + 5;
+    while (*p != ' ' && *p != '\0') {
+        p++;
+    }
+    while (*p == ' ') {
+        p++;
+    }
+    consumed = StrToLong(p, code_out);
+    if (consumed < 1) {
+        *code_out = 0;
+        return ERROR_HTTP_PROTOCOL;
+    }
+    return 0;
 }
 
 static STRPTR
@@ -68,7 +92,7 @@ ht_header_value(struct HttpTransaction *txn, STRPTR name)
     for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
          hh != NULL && hh->hh_Node.ln_Succ != NULL;
          hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
-        if (ht_str_ieq(hh->hh_Name, name)) {
+        if (Stricmp(hh->hh_Name, name) == 0) {
             return hh->hh_Value;
         }
     }
@@ -105,8 +129,14 @@ ht_conn_compact(struct HtConnection *conn)
         return;
     }
     if (conn->hc_IoPos > 0 && conn->hc_IoLen > conn->hc_IoPos) {
+        UBYTE *src;
+        ULONG i;
+
         remain = conn->hc_IoLen - conn->hc_IoPos;
-        memmove(conn->hc_IoBuf, conn->hc_IoBuf + conn->hc_IoPos, remain);
+        src = conn->hc_IoBuf + conn->hc_IoPos;
+        for (i = 0; i < remain; i++) {
+            conn->hc_IoBuf[i] = src[i];
+        }
         conn->hc_IoLen = remain;
         conn->hc_IoPos = 0;
     } else if (conn->hc_IoPos >= conn->hc_IoLen) {
@@ -328,7 +358,8 @@ ht_http_prepare_multipart(struct HttpTransaction *txn)
     if (txn->ht_MultipartBody != NULL) {
         return 0;
     }
-    sprintf(bound, "----AmiHttp%08lx%08lx", (ULONG)txn, (ULONG)FindTask(NULL));
+    SNPrintf((STRPTR)bound, (ULONG)sizeof(bound),
+        (CONST_STRPTR)"----AmiHttp%08lx%08lx", (ULONG)txn, (ULONG)FindTask(NULL));
     if (txn->ht_MultipartBoundary) {
         ht_free(txn->ht_MultipartBoundary);
     }
@@ -365,19 +396,20 @@ ht_http_prepare_multipart(struct HttpTransaction *txn)
         if (part->hfp_Name == NULL) {
             continue;
         }
-        sprintf(line, "--%s\r\n", txn->ht_MultipartBoundary);
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"--%s\r\n", txn->ht_MultipartBoundary);
         rc = ht_multipart_append_str(buf, cap, &used, (STRPTR)line);
         if (rc != 0) {
             ht_free(buf);
             return rc;
         }
         if (part->hfp_Filename != NULL && part->hfp_Filename[0] != '\0') {
-            sprintf(line,
-                "Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n\r\n",
+            SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+                (CONST_STRPTR)"Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n\r\n",
                 part->hfp_Name, part->hfp_Filename);
         } else {
-            sprintf(line,
-                "Content-Disposition: form-data; name=\"%s\"\r\n\r\n",
+            SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+                (CONST_STRPTR)"Content-Disposition: form-data; name=\"%s\"\r\n\r\n",
                 part->hfp_Name);
         }
         rc = ht_multipart_append_str(buf, cap, &used, (STRPTR)line);
@@ -401,7 +433,8 @@ ht_http_prepare_multipart(struct HttpTransaction *txn)
             return rc;
         }
     }
-    sprintf(line, "--%s--\r\n", txn->ht_MultipartBoundary);
+    SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+        (CONST_STRPTR)"--%s--\r\n", txn->ht_MultipartBoundary);
     rc = ht_multipart_append_str(buf, cap, &used, (STRPTR)line);
     if (rc != 0) {
         ht_free(buf);
@@ -421,8 +454,9 @@ ht_http_prepare_multipart(struct HttpTransaction *txn)
     ctype_len = ht_strlen(txn->ht_MultipartBoundary) + 32;
     txn->ht_ContentType = (STRPTR)ht_alloc(ctype_len, MEMF_CLEAR);
     if (txn->ht_ContentType != NULL) {
-        sprintf((char *)txn->ht_ContentType,
-            "multipart/form-data; boundary=%s", txn->ht_MultipartBoundary);
+        SNPrintf((STRPTR)txn->ht_ContentType, ctype_len,
+            (CONST_STRPTR)"multipart/form-data; boundary=%s",
+            txn->ht_MultipartBoundary);
     }
     if (txn->ht_Method == NULL || txn->ht_Method[0] == '\0') {
         if (txn->ht_Method) {
@@ -453,7 +487,6 @@ ht_http_send_stream_body(struct AmiHttpBase *base, struct HttpTransaction *txn)
     hk = txn->ht_PostStreamHook;
     offset = 0;
     while (offset < txn->ht_PostLength) {
-        memset(&msg, 0, sizeof(msg));
         msg.hps_Transaction = txn;
         msg.hps_Buffer = chunk;
         msg.hps_MaxLen = sizeof(chunk);
@@ -486,12 +519,11 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
     STRPTR path;
     STRPTR cookie_hdr;
     ULONG cap;
-    ULONG used;
-    UBYTE *buf;
-    UBYTE *p;
     struct HttpHeader *hh;
     LONG rc;
-    char line[512];
+    UBYTE line[512];
+    UBYTE *buf;
+    BOOL is_post;
 
     if (txn == NULL || out_buf == NULL || out_len == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
@@ -523,91 +555,87 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
         ht_url_free_fields(&pu);
         return ERROR_HTTP_OUT_OF_MEMORY;
     }
-    used = 0;
-    p = buf;
     if (txn->ht_RequestUri != NULL && txn->ht_RequestUri[0] != '\0') {
-        sprintf((char *)line, "%s %s HTTP/1.1\r\n", method, txn->ht_RequestUri);
+        SNPrintf((STRPTR)buf, cap, (CONST_STRPTR)"%s %s HTTP/1.1\r\n",
+            method, txn->ht_RequestUri);
     } else if (pu.pu_Query != NULL && pu.pu_Query[0] != '\0') {
-        sprintf((char *)line, "%s %s?%s HTTP/1.1\r\n", method, path, pu.pu_Query);
+        SNPrintf((STRPTR)buf, cap, (CONST_STRPTR)"%s %s?%s HTTP/1.1\r\n",
+            method, path, pu.pu_Query);
     } else {
-        sprintf((char *)line, "%s %s HTTP/1.1\r\n", method, path);
+        SNPrintf((STRPTR)buf, cap, (CONST_STRPTR)"%s %s HTTP/1.1\r\n",
+            method, path);
     }
-    used = (ULONG)strlen(line);
-    memcpy(p, line, used);
-    p += used;
-    sprintf((char *)line, "Host: %s", pu.pu_Host);
     if (pu.pu_Port != 0 &&
         !((pu.pu_IsSecure && pu.pu_Port == 443) ||
           (!pu.pu_IsSecure && pu.pu_Port == 80))) {
-        sprintf((char *)line + strlen(line), ":%lu", pu.pu_Port);
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"Host: %s:%lu\r\n", pu.pu_Host, pu.pu_Port);
+    } else {
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"Host: %s\r\n", pu.pu_Host);
     }
-    strcat((char *)line, "\r\n");
-    used = (ULONG)strlen((char *)buf) + (ULONG)strlen(line);
-    if (used + 1 > cap) {
-        ht_free(buf);
-        ht_url_free_fields(&pu);
-        return ERROR_HTTP_OUT_OF_MEMORY;
-    }
-    strcat((char *)buf, line);
-    p = buf + strlen((char *)buf);
-    sprintf((char *)line, "User-Agent: %s\r\n", ht_txn_user_agent(txn));
-    strcat((char *)buf, line);
-    strcat((char *)buf, "Accept: */*\r\n");
+    Strncat((STRPTR)buf, (STRPTR)line, cap);
+    SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+        (CONST_STRPTR)"User-Agent: %s\r\n", ht_txn_user_agent(txn));
+    Strncat((STRPTR)buf, (STRPTR)line, cap);
+    Strncat((STRPTR)buf, (CONST_STRPTR)"Accept: */*\r\n", cap);
     if (txn->ht_Session != NULL && txn->ht_Session->hs_KeepAlive &&
         (txn->ht_Conn == NULL || !txn->ht_Conn->hc_ViaProxy)) {
-        strcat((char *)buf, "Connection: keep-alive\r\n");
+        Strncat((STRPTR)buf, (CONST_STRPTR)"Connection: keep-alive\r\n", cap);
         txn->ht_Flags |= HTF_KEEPALIVE_REQ;
     } else {
-        strcat((char *)buf, "Connection: close\r\n");
+        Strncat((STRPTR)buf, (CONST_STRPTR)"Connection: close\r\n", cap);
     }
     if (txn->ht_Referer != NULL && txn->ht_Referer[0] != '\0') {
-        sprintf((char *)line, "Referer: %s\r\n", txn->ht_Referer);
-        strcat((char *)buf, line);
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"Referer: %s\r\n", txn->ht_Referer);
+        Strncat((STRPTR)buf, (STRPTR)line, cap);
     }
     if (txn->ht_Session != NULL && txn->ht_Session->hs_AcceptEncoding != NULL &&
         txn->ht_Session->hs_AcceptEncoding[0] != '\0') {
-        /*
-         * Only advertise encodings z.library can decode (session may set
-         * HTSA_ACCEPT_ENCODING; NewHttpSession defaults when z is open).
-         */
         if (HttpBase != NULL && ht_zlib_ensure(HttpBase)) {
-            sprintf((char *)line, "Accept-Encoding: %s\r\n",
+            SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+                (CONST_STRPTR)"Accept-Encoding: %s\r\n",
                 txn->ht_Session->hs_AcceptEncoding);
-            strcat((char *)buf, line);
+            Strncat((STRPTR)buf, (STRPTR)line, cap);
         }
     }
     if (txn->ht_RangeStart >= 0) {
         if (txn->ht_RangeEnd >= txn->ht_RangeStart) {
-            sprintf((char *)line, "Range: bytes=%ld-%ld\r\n",
+            SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+                (CONST_STRPTR)"Range: bytes=%ld-%ld\r\n",
                 txn->ht_RangeStart, txn->ht_RangeEnd);
         } else {
-            sprintf((char *)line, "Range: bytes=%ld-\r\n", txn->ht_RangeStart);
+            SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+                (CONST_STRPTR)"Range: bytes=%ld-\r\n", txn->ht_RangeStart);
         }
-        strcat((char *)buf, line);
+        Strncat((STRPTR)buf, (STRPTR)line, cap);
     }
     if (txn->ht_IfModifiedSince != NULL && txn->ht_IfModifiedSince[0] != '\0') {
-        sprintf((char *)line, "If-Modified-Since: %s\r\n",
-            txn->ht_IfModifiedSince);
-        strcat((char *)buf, line);
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"If-Modified-Since: %s\r\n", txn->ht_IfModifiedSince);
+        Strncat((STRPTR)buf, (STRPTR)line, cap);
     }
     if (txn->ht_IfNoneMatch != NULL && txn->ht_IfNoneMatch[0] != '\0') {
-        sprintf((char *)line, "If-None-Match: %s\r\n", txn->ht_IfNoneMatch);
-        strcat((char *)buf, line);
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"If-None-Match: %s\r\n", txn->ht_IfNoneMatch);
+        Strncat((STRPTR)buf, (STRPTR)line, cap);
     }
     if (txn->ht_NoCache) {
-        strcat((char *)buf, "Cache-Control: no-cache\r\n");
-        strcat((char *)buf, "Pragma: no-cache\r\n");
+        Strncat((STRPTR)buf, (CONST_STRPTR)"Cache-Control: no-cache\r\n", cap);
+        Strncat((STRPTR)buf, (CONST_STRPTR)"Pragma: no-cache\r\n", cap);
     }
     if (txn->ht_Session != NULL && txn->ht_Session->hs_CookieJar != NULL) {
         struct HttpCookieJar *jar;
         ULONG room;
 
         jar = txn->ht_Session->hs_CookieJar;
-        room = HT_REQBUF_MAX - (ULONG)strlen((char *)buf);
+        room = HT_REQBUF_MAX - ht_strlen((STRPTR)buf);
         if (jar->hj_RequestHook != NULL) {
             rc = ht_cookie_append_request(jar, txn, pu.pu_IsSecure,
                 (STRPTR)buf, room);
             if (rc != 0) {
+                ht_free(buf);
                 ht_url_free_fields(&pu);
                 return rc;
             }
@@ -615,8 +643,9 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
             cookie_hdr = ht_cookie_header_for_url(jar,
                 txn->ht_Url, pu.pu_IsSecure);
             if (cookie_hdr != NULL && cookie_hdr[0] != '\0') {
-                sprintf((char *)line, "Cookie: %s\r\n", cookie_hdr);
-                strcat((char *)buf, line);
+                SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+                    (CONST_STRPTR)"Cookie: %s\r\n", cookie_hdr);
+                Strncat((STRPTR)buf, (STRPTR)line, cap);
             }
             if (cookie_hdr != NULL) {
                 ht_free(cookie_hdr);
@@ -624,37 +653,41 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
         }
     }
     if (txn->ht_BasicAuth != NULL && txn->ht_BasicAuth[0] != '\0') {
-        sprintf((char *)line, "Authorization: Basic %s\r\n", txn->ht_BasicAuth);
-        strcat((char *)buf, line);
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"Authorization: Basic %s\r\n", txn->ht_BasicAuth);
+        Strncat((STRPTR)buf, (STRPTR)line, cap);
     }
     if (txn->ht_BasicProxyAuth != NULL && txn->ht_BasicProxyAuth[0] != '\0') {
-        sprintf((char *)line, "Proxy-Authorization: Basic %s\r\n",
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"Proxy-Authorization: Basic %s\r\n",
             txn->ht_BasicProxyAuth);
-        strcat((char *)buf, line);
+        Strncat((STRPTR)buf, (STRPTR)line, cap);
     }
     if ((txn->ht_PostBody != NULL && txn->ht_PostLength > 0) ||
         (txn->ht_PostStreamHook != NULL && txn->ht_PostLength > 0)) {
         STRPTR ctype;
-        BOOL is_post;
 
-        sprintf((char *)line, "Content-Length: %lu\r\n", txn->ht_PostLength);
-        strcat((char *)buf, line);
+        SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+            (CONST_STRPTR)"Content-Length: %lu\r\n", txn->ht_PostLength);
+        Strncat((STRPTR)buf, (STRPTR)line, cap);
         ctype = txn->ht_ContentType;
         if (ctype != NULL && ctype[0] != '\0') {
-            sprintf((char *)line, "Content-Type: %s\r\n", ctype);
-            strcat((char *)buf, line);
+            SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+                (CONST_STRPTR)"Content-Type: %s\r\n", ctype);
+            Strncat((STRPTR)buf, (STRPTR)line, cap);
         } else if (txn->ht_PostStreamHook == NULL) {
             is_post = FALSE;
             if (txn->ht_Method != NULL &&
-                stricmp((char *)txn->ht_Method, "POST") == 0) {
+                Stricmp(txn->ht_Method, (STRPTR)"POST") == 0) {
                 is_post = TRUE;
             } else if (txn->ht_Method == NULL ||
                 txn->ht_Method[0] == '\0') {
                 is_post = TRUE;
             }
             if (is_post) {
-                strcat((char *)buf,
-                    "Content-Type: application/x-www-form-urlencoded\r\n");
+                Strncat((STRPTR)buf,
+                    (CONST_STRPTR)"Content-Type: application/x-www-form-urlencoded\r\n",
+                    cap);
             }
         }
     }
@@ -662,13 +695,14 @@ ht_http_build_request(struct HttpTransaction *txn, UBYTE **out_buf, ULONG *out_l
          hh != NULL && hh->hh_Node.ln_Succ != NULL;
          hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
         if (hh->hh_Name != NULL && hh->hh_Value != NULL) {
-            sprintf((char *)line, "%s: %s\r\n", hh->hh_Name, hh->hh_Value);
-            strcat((char *)buf, line);
+            SNPrintf((STRPTR)line, (ULONG)sizeof(line),
+                (CONST_STRPTR)"%s: %s\r\n", hh->hh_Name, hh->hh_Value);
+            Strncat((STRPTR)buf, (STRPTR)line, cap);
         }
     }
-    strcat((char *)buf, "\r\n");
+    Strncat((STRPTR)buf, (CONST_STRPTR)"\r\n", cap);
     *out_buf = buf;
-    *out_len = (ULONG)strlen((char *)buf);
+    *out_len = ht_strlen((STRPTR)buf);
     ht_url_free_fields(&pu);
     return 0;
 }
@@ -776,7 +810,7 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
     txn->ht_StatusLine = line;
     txn->ht_Conn->hc_IoPos = line_start + line_len + 2;
     code = 0;
-    sscanf(line, "HTTP/%*s %ld", &code);
+    (void)ht_parse_http_status(line, &code);
     txn->ht_StatusCode = code;
     header_count = 0;
     for (;;) {
@@ -805,8 +839,10 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
         if (line == NULL) {
             return ERROR_HTTP_OUT_OF_MEMORY;
         }
-        colon = strchr(line, ':');
-        if (colon != NULL) {
+        for (colon = line; *colon != '\0' && *colon != ':'; colon++) {
+            ;
+        }
+        if (*colon == ':') {
             *colon = '\0';
             name = line;
             value = colon + 1;
@@ -818,9 +854,9 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
         ht_free(line);
     }
     conn_val = ht_header_value(txn, (STRPTR)"Connection");
-    if (conn_val != NULL && ht_str_ieq(conn_val, (STRPTR)"keep-alive")) {
+    if (conn_val != NULL && Stricmp(conn_val, (STRPTR)"keep-alive") == 0) {
         txn->ht_Flags |= HTF_KEEPALIVE;
-    } else if (conn_val != NULL && ht_str_ieq(conn_val, (STRPTR)"close")) {
+    } else if (conn_val != NULL && Stricmp(conn_val, (STRPTR)"close") == 0) {
         txn->ht_Flags &= ~HTF_KEEPALIVE;
     } else if (code >= 100 && code < 200) {
         /* HTTP/1.1 default */
@@ -829,21 +865,30 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
     te_val = ht_header_value(txn, (STRPTR)"Transfer-Encoding");
     cl_val = ht_header_value(txn, (STRPTR)"Content-Length");
     if (cl_val != NULL) {
-        txn->ht_ContentLength = (LONG)atol((char *)cl_val);
+        {
+            LONG cln;
+
+            cln = 0;
+            if (StrToLong(cl_val, &cln) >= 1) {
+                txn->ht_ContentLength = cln;
+            } else {
+                txn->ht_ContentLength = -1;
+            }
+        }
     } else {
         txn->ht_ContentLength = -1;
     }
-    if (te_val != NULL && strstr(te_val, "chunked") != NULL) {
+    if (te_val != NULL && ht_has_token(te_val, (CONST_STRPTR)"chunked")) {
         /* Chunked overrides Content-Length (RFC 7230). */
         txn->ht_Flags |= HTF_CHUNKED;
         txn->ht_ContentLength = -1;
     }
     ce_val = ht_header_value(txn, (STRPTR)"Content-Encoding");
     if (ce_val != NULL && HttpBase != NULL && ht_zlib_ensure(HttpBase)) {
-        if (strstr(ce_val, "gzip") != NULL) {
+        if (ht_has_token(ce_val, (CONST_STRPTR)"gzip")) {
             txn->ht_Flags |= HTF_GZIP;
             txn->ht_ZWindowBits = 15L + 16L;
-        } else if (strstr(ce_val, "deflate") != NULL) {
+        } else if (ht_has_token(ce_val, (CONST_STRPTR)"deflate")) {
             txn->ht_Flags |= HTF_GZIP;
             txn->ht_ZWindowBits = 15L + 32L;
         }
@@ -923,7 +968,7 @@ ht_header_value_list(struct List *list, STRPTR name)
     for (hh = (struct HttpHeader *)list->lh_Head;
          hh != NULL && hh->hh_Node.ln_Succ != NULL;
          hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
-        if (ht_str_ieq(hh->hh_Name, name)) {
+        if (Stricmp(hh->hh_Name, name) == 0) {
             return hh->hh_Value;
         }
     }
@@ -989,7 +1034,7 @@ ht_http_read_stream_headers(struct AmiHttpBase *base,
     *status_line = line;
     conn->hc_IoPos = line_start + line_len + 2;
     code = 0;
-    sscanf(line, "HTTP/%*s %ld", &code);
+    (void)ht_parse_http_status(line, &code);
     *status_code = code;
     header_count = 0;
     for (;;) {
@@ -1018,8 +1063,10 @@ ht_http_read_stream_headers(struct AmiHttpBase *base,
         if (line == NULL) {
             return ERROR_HTTP_OUT_OF_MEMORY;
         }
-        colon = strchr(line, ':');
-        if (colon != NULL) {
+        for (colon = line; *colon != '\0' && *colon != ':'; colon++) {
+            ;
+        }
+        if (*colon == ':') {
             *colon = '\0';
             name = line;
             value = colon + 1;
@@ -1037,9 +1084,14 @@ ht_http_read_stream_headers(struct AmiHttpBase *base,
     te_val = ht_header_value_list(resp_headers, (STRPTR)"Transfer-Encoding");
     cl_val = ht_header_value_list(resp_headers, (STRPTR)"Content-Length");
     if (cl_val != NULL) {
-        *content_length = (LONG)atol((char *)cl_val);
+        LONG cln;
+
+        cln = 0;
+        if (StrToLong(cl_val, &cln) >= 1) {
+            *content_length = cln;
+        }
     }
-    if (te_val != NULL && strstr(te_val, "chunked") != NULL) {
+    if (te_val != NULL && ht_has_token(te_val, (CONST_STRPTR)"chunked")) {
         *flags |= HTF_CHUNKED;
         *content_length = -1;
     }

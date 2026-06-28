@@ -136,7 +136,6 @@ ht_hook_cert_verify(struct HttpTransaction *txn, struct HtSsl *ssl,
     if (txn == NULL || ssl == NULL) {
         return FALSE;
     }
-    memset(&msg, 0, sizeof(msg));
     msg.hcv_Transaction = txn;
     msg.hcv_VerifyResult = verify_result;
     msg.hcv_Accept = FALSE;

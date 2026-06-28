@@ -10,7 +10,6 @@
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <exec/lists.h>
-#include <stdlib.h>
 #include <utility/tagitem.h>
 
 #include <proto/exec.h>

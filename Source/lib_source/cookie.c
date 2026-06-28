@@ -11,7 +11,6 @@
 #include <exec/memory.h>
 #include <exec/lists.h>
 #include <exec/semaphores.h>
-#include <string.h>
 
 #include <proto/exec.h>
 

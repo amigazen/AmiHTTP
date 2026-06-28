@@ -9,8 +9,6 @@
 
 #include <exec/types.h>
 #include <exec/memory.h>
-#include <ctype.h>
-#include <string.h>
 
 #include "private/ht_internal.h"
 

@@ -629,11 +629,10 @@ ht_tcp_connect(struct AmiHttpBase *base, LONG sock, struct hostent *hent,
         hent->h_addr_list[0] == NULL || hent->h_addrtype != AF_INET) {
         return ERROR_HTTP_DNS_FAILED;
     }
-    memset(&sad, 0, sizeof(sad));
     sad.sin_len = sizeof(sad);
     sad.sin_family = AF_INET;
     sad.sin_port = htons((UWORD)port);
-    memcpy(&sad.sin_addr, hent->h_addr_list[0], (size_t)hent->h_length);
+    CopyMem(hent->h_addr_list[0], (APTR)&sad.sin_addr, (ULONG)hent->h_length);
 
     rc = ht_io_obtain(base);
     if (rc != 0) {

@@ -9,10 +9,10 @@
 
 #include <exec/types.h>
 #include <exec/lists.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
+
+#include <proto/exec.h>
+#include <proto/dos.h>
+#include <proto/utility.h>
 
 #include <libraries/amihttp.h>
 #include <amihttp/amihttpbase.h>
@@ -104,10 +104,14 @@ __ASM__ __SAVE_DS__ OpenHttpConnection(
     if (use_port == 0) {
         use_port = ssl ? 443UL : 80UL;
     }
-    sprintf(urlbuf, "%s://%s", ssl ? "https" : "http", host);
     if ((ssl && use_port != 443) || (!ssl && use_port != 80)) {
-        strcat(urlbuf, ":");
-        sprintf(urlbuf + strlen(urlbuf), "%lu", use_port);
+        SNPrintf((STRPTR)urlbuf, (ULONG)sizeof(urlbuf),
+            (CONST_STRPTR)"%s://%s:%lu", ssl ? (CONST_STRPTR)"https" : (CONST_STRPTR)"http",
+            host, use_port);
+    } else {
+        SNPrintf((STRPTR)urlbuf, (ULONG)sizeof(urlbuf),
+            (CONST_STRPTR)"%s://%s", ssl ? (CONST_STRPTR)"https" : (CONST_STRPTR)"http",
+            host);
     }
     hst = (struct HtStreamConn *)ht_alloc(sizeof(struct HtStreamConn), MEMF_CLEAR);
     if (hst == NULL) {
@@ -232,9 +236,9 @@ __ASM__ __SAVE_DS__ HttpConnectionReadResponseLine(
     if (hst->hsc_StatusLine == NULL) {
         return 0;
     }
-    strncpy((char *)buffer, (char *)hst->hsc_StatusLine, buflen - 1);
+    Strncpy((STRPTR)buffer, (STRPTR)hst->hsc_StatusLine, buflen - 1);
     buffer[buflen - 1] = '\0';
-    return (LONG)strlen((char *)buffer);
+    return (LONG)ht_strlen((STRPTR)buffer);
 }
 
 LONG
@@ -275,7 +279,7 @@ __ASM__ __SAVE_DS__ HttpConnectionRespHeader(
          hh != NULL && hh->hh_Node.ln_Succ != NULL;
          hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
         if (hh->hh_Name != NULL &&
-            stricmp((char *)hh->hh_Name, (char *)header_name) == 0) {
+            Stricmp(hh->hh_Name, header_name) == 0) {
             return hh->hh_Value;
         }
     }

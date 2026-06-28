@@ -11,12 +11,11 @@
 #include <exec/memory.h>
 
 #include <proto/exec.h>
+#include <proto/dos.h>
+#include <proto/utility.h>
 
 #include <amihttp/amihttpbase.h>
 #include <libraries/amihttp.h>
-
-#include <string.h>
-#include <stdio.h>
 
 #include "private/ht_debug.h"
 #include "private/ht_internal.h"
@@ -50,16 +49,24 @@ ht_proxy_parse(STRPTR spec, STRPTR *out_host, ULONG *out_port)
         return ERROR_HTTP_INVALID_URL;
     }
     host = spec;
-    if (strncmp((const char *)spec, "http://", 7) == 0) {
+    if (Strnicmp(spec, (STRPTR)"http://", 7) == 0) {
         host = spec + 7;
-    } else if (strncmp((const char *)spec, "https://", 8) == 0) {
+    } else if (Strnicmp(spec, (STRPTR)"https://", 8) == 0) {
         host = spec + 8;
     }
-    colon = strchr((const char *)host, ':');
-    if (colon != NULL) {
-        port = (ULONG)atol((const char *)(colon + 1));
-        if (port == 0) {
-            port = 8080UL;
+    for (colon = host; *colon != '\0' && *colon != ':'; colon++) {
+        ;
+    }
+    if (*colon == ':') {
+        {
+            LONG portl;
+
+            portl = 0;
+            if (StrToLong(colon + 1, &portl) >= 1 && portl > 0) {
+                port = (ULONG)portl;
+            } else {
+                port = 8080UL;
+            }
         }
         *out_host = ht_strndup(host, (LONG)(colon - host));
     } else {
@@ -69,9 +76,11 @@ ht_proxy_parse(STRPTR spec, STRPTR *out_host, ULONG *out_port)
     if (*out_host == NULL) {
         return ERROR_HTTP_OUT_OF_MEMORY;
     }
-    p = strchr((const char *)*out_host, '/');
-    if (p != NULL) {
-        *p = '\0';
+    for (p = *out_host; *p != '\0'; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            break;
+        }
     }
     *out_port = port;
     return 0;
@@ -110,21 +119,24 @@ ht_route_build_request_uri(struct ParsedUrl *pu, STRPTR full_url, BOOL absolute)
         if (pu->pu_Port != 0 &&
             !((pu->pu_IsSecure && pu->pu_Port == 443) ||
               (!pu->pu_IsSecure && pu->pu_Port == 80))) {
-            sprintf(portbuf, ":%lu", pu->pu_Port);
+            SNPrintf((STRPTR)portbuf, (ULONG)sizeof(portbuf),
+                (CONST_STRPTR)":%lu", pu->pu_Port);
         }
         if (pu->pu_Query != NULL && pu->pu_Query[0] != '\0') {
-            sprintf((char *)uri, "%s://%s%s%s?%s",
-                pu->pu_IsSecure ? "https" : "http",
-                pu->pu_Host ? pu->pu_Host : "",
+            SNPrintf((STRPTR)uri, len,
+                (CONST_STRPTR)"%s://%s%s%s?%s",
+                pu->pu_IsSecure ? (CONST_STRPTR)"https" : (CONST_STRPTR)"http",
+                pu->pu_Host ? pu->pu_Host : (STRPTR)"",
                 portbuf,
-                pu->pu_Path ? pu->pu_Path : "/",
+                pu->pu_Path ? pu->pu_Path : (STRPTR)"/",
                 pu->pu_Query);
         } else {
-            sprintf((char *)uri, "%s://%s%s%s",
-                pu->pu_IsSecure ? "https" : "http",
-                pu->pu_Host ? pu->pu_Host : "",
+            SNPrintf((STRPTR)uri, len,
+                (CONST_STRPTR)"%s://%s%s%s",
+                pu->pu_IsSecure ? (CONST_STRPTR)"https" : (CONST_STRPTR)"http",
+                pu->pu_Host ? pu->pu_Host : (STRPTR)"",
                 portbuf,
-                pu->pu_Path ? pu->pu_Path : "/");
+                pu->pu_Path ? pu->pu_Path : (STRPTR)"/");
         }
         return uri;
     }
@@ -134,8 +146,8 @@ ht_route_build_request_uri(struct ParsedUrl *pu, STRPTR full_url, BOOL absolute)
         if (uri == NULL) {
             return NULL;
         }
-        sprintf((char *)uri, "%s?%s",
-            pu->pu_Path ? pu->pu_Path : "/",
+        SNPrintf((STRPTR)uri, len, (CONST_STRPTR)"%s?%s",
+            pu->pu_Path ? pu->pu_Path : (STRPTR)"/",
             pu->pu_Query);
         return uri;
     }
@@ -160,7 +172,8 @@ ht_route_build_tunnel_target(struct ParsedUrl *pu)
         (!pu->pu_IsSecure && pu->pu_Port == 80)) {
         return ht_strdup(pu->pu_Host);
     }
-    sprintf(buf, "%s:%lu", pu->pu_Host, pu->pu_Port);
+    SNPrintf((STRPTR)buf, (ULONG)sizeof(buf),
+        (CONST_STRPTR)"%s:%lu", pu->pu_Host, pu->pu_Port);
     return ht_strdup((STRPTR)buf);
 }
 
@@ -176,7 +189,15 @@ ht_route_resolve(struct AmiHttpBase *base, struct HttpSession *session,
     if (pu == NULL || route == NULL || pu->pu_Host == NULL) {
         return ERROR_HTTP_INVALID_URL;
     }
-    memset(route, 0, sizeof(*route));
+    route->hr_ConnectHost = NULL;
+    route->hr_ConnectPort = 0;
+    route->hr_OriginHost = NULL;
+    route->hr_OriginPort = 0;
+    route->hr_OriginSsl = FALSE;
+    route->hr_ViaProxy = FALSE;
+    route->hr_SslTunnel = FALSE;
+    route->hr_RequestUri = NULL;
+    route->hr_TunnelTarget = NULL;
     if (pu->pu_Port == 0) {
         pu->pu_Port = pu->pu_IsSecure ? 443UL : 80UL;
     }
@@ -243,12 +264,52 @@ ht_route_free(struct HtRoute *route)
     if (route->hr_TunnelTarget) {
         ht_free(route->hr_TunnelTarget);
     }
-    memset(route, 0, sizeof(*route));
+    route->hr_ConnectHost = NULL;
+    route->hr_ConnectPort = 0;
+    route->hr_OriginHost = NULL;
+    route->hr_OriginPort = 0;
+    route->hr_OriginSsl = FALSE;
+    route->hr_ViaProxy = FALSE;
+    route->hr_SslTunnel = FALSE;
+    route->hr_RequestUri = NULL;
+    route->hr_TunnelTarget = NULL;
 }
 
 /*
  * Read CONNECT response status; expect HTTP/1.x 200 before TLS handshake.
  */
+static LONG
+ht_proxy_parse_connect_status(UBYTE *buf, ULONG total, LONG *code_out)
+{
+    ULONG i;
+    STRPTR p;
+    LONG consumed;
+
+    if (buf == NULL || code_out == NULL) {
+        return ERROR_HTTP_PROTOCOL;
+    }
+    *code_out = 0;
+    for (i = 0; i + 11 < total; i++) {
+        if (buf[i] == 'H' && buf[i + 1] == 'T' && buf[i + 2] == 'T' &&
+            buf[i + 3] == 'P' && buf[i + 4] == '/') {
+            p = (STRPTR)(buf + i + 5);
+            while (*p != ' ' && *p != '\0') {
+                p++;
+            }
+            while (*p == ' ') {
+                p++;
+            }
+            consumed = StrToLong(p, code_out);
+            if (consumed >= 1) {
+                return 0;
+            }
+            *code_out = 0;
+            return ERROR_HTTP_PROTOCOL;
+        }
+    }
+    return ERROR_HTTP_PROTOCOL;
+}
+
 static LONG
 ht_proxy_read_connect_response(struct AmiHttpBase *base,
     struct HtConnection *conn, ULONG timeout_secs)
@@ -286,8 +347,9 @@ ht_proxy_read_connect_response(struct AmiHttpBase *base,
     for (i = 0; i + 11 < total; i++) {
         if (buf[i] == 'H' && buf[i + 1] == 'T' && buf[i + 2] == 'T' &&
             buf[i + 3] == 'P' && buf[i + 4] == '/') {
-            sscanf((char *)buf + i, "HTTP/%*s %ld", &code);
-            break;
+            if (ht_proxy_parse_connect_status(buf, total, &code) == 0) {
+                break;
+            }
         }
     }
     if (code == 407) {
@@ -310,19 +372,19 @@ ht_proxy_send_connect(struct AmiHttpBase *base, struct HtConnection *conn,
     if (route == NULL || route->hr_TunnelTarget == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
     }
-    len = (ULONG)sprintf((char *)req,
-        "CONNECT %s HTTP/1.1\r\n"
+    len = (ULONG)SNPrintf((STRPTR)req, (ULONG)sizeof(req),
+        (CONST_STRPTR)"CONNECT %s HTTP/1.1\r\n"
         "Host: %s\r\n",
         route->hr_TunnelTarget,
         route->hr_TunnelTarget);
     if (txn != NULL && txn->ht_BasicProxyAuth != NULL &&
         txn->ht_BasicProxyAuth[0] != '\0') {
-        len += (ULONG)sprintf((char *)req + len,
-            "Proxy-Authorization: Basic %s\r\n",
+        len += (ULONG)SNPrintf((STRPTR)req + len, (ULONG)sizeof(req) - len,
+            (CONST_STRPTR)"Proxy-Authorization: Basic %s\r\n",
             txn->ht_BasicProxyAuth);
     }
-    strcat((char *)req, "\r\n");
-    len = (ULONG)strlen((char *)req);
+    Strncat((STRPTR)req, (CONST_STRPTR)"\r\n", (ULONG)sizeof(req));
+    len = ht_strlen((STRPTR)req);
     rc = ht_transport_send(base, conn, req, len);
     if (rc < 0) {
         return rc;

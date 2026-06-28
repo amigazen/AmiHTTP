@@ -9,8 +9,10 @@
 
 #include <exec/types.h>
 #include <utility/tagitem.h>
-#include <string.h>
-#include <stdio.h>
+
+#include <proto/exec.h>
+#include <proto/dos.h>
+#include <proto/utility.h>
 
 #include <amihttp/amihttpbase.h>
 #include <libraries/amihttp.h>
@@ -244,7 +246,8 @@ __ASM__ __SAVE_DS__ HttpFault(
 
     text = ht_http_error_catalog(code);
     if (text == NULL) {
-        sprintf(fallback, "Error code %ld\n", code);
+        SNPrintf((STRPTR)fallback, (ULONG)sizeof(fallback),
+            (CONST_STRPTR)"Error code %ld\n", code);
         text = fallback;
     }
 
@@ -252,13 +255,13 @@ __ASM__ __SAVE_DS__ HttpFault(
     p = buffer;
 
     if (header != NULL && header[0] != '\0') {
-        hdr_len = (ULONG)strlen(header);
+        hdr_len = ht_strlen(header);
         copy = hdr_len;
         if (used + copy + 2 >= (ULONG)buflen) {
             copy = (ULONG)buflen - used - 1;
         }
         if (copy > 0) {
-            memcpy(p, header, copy);
+            CopyMem(header, p, copy);
             used += copy;
             p += copy;
         }
@@ -270,13 +273,13 @@ __ASM__ __SAVE_DS__ HttpFault(
         }
     }
 
-    txt_len = (ULONG)strlen(text);
+    txt_len = ht_strlen(text);
     copy = txt_len;
     if (used + copy >= (ULONG)buflen) {
         copy = (ULONG)buflen - used - 1;
     }
     if (copy > 0) {
-        memcpy(p, text, copy);
+        CopyMem(text, p, copy);
         used += copy;
     }
     buffer[used] = '\0';

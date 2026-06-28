@@ -13,8 +13,8 @@
 
 #include <exec/types.h>
 #include <exec/memory.h>
-#include <ctype.h>
 
+#include <proto/dos.h>
 #include <proto/utility.h>
 
 #include <libraries/amihttp.h>
@@ -67,28 +67,6 @@ ht_prefix_icmp(STRPTR s, CONST_STRPTR prefix, LONG plen)
     return TRUE;
 }
 
-static ULONG
-ht_parse_ulong(STRPTR s, STRPTR *end_out)
-{
-    ULONG val;
-    ULONG i;
-
-    val = 0;
-    if (s == NULL) {
-        if (end_out != NULL) {
-            *end_out = s;
-        }
-        return 0;
-    }
-    for (i = 0; s[i] >= '0' && s[i] <= '9'; i++) {
-        val = val * 10UL + (ULONG)(s[i] - '0');
-    }
-    if (end_out != NULL) {
-        *end_out = s + i;
-    }
-    return val;
-}
-
 static BOOL
 ht_url_default_port(struct ParsedUrl *url, ULONG port)
 {
@@ -104,7 +82,18 @@ ht_url_default_port(struct ParsedUrl *url, ULONG port)
     return FALSE;
 }
 
-static STRPTR
+static BOOL
+ht_url_unreserved(UBYTE c)
+{
+    if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+        (c >= 'a' && c <= 'z') || c == '-' || c == '_' ||
+        c == '.' || c == '~') {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+STRPTR
 ht_url_build_from_parsed(struct ParsedUrl *url)
 {
     STRPTR out;
@@ -278,7 +267,16 @@ ht_url_parse(STRPTR url, struct ParsedUrl *out)
     slash = ht_strchr(p, '/');
     if (colon != NULL && (slash == NULL || colon < slash)) {
         out->pu_Host = ht_copy_segment(p, colon);
-        out->pu_Port = ht_parse_ulong(colon + 1, NULL);
+        {
+            LONG portl;
+
+            portl = 0;
+            if (StrToLong(colon + 1, &portl) >= 1 && portl > 0) {
+                out->pu_Port = (ULONG)portl;
+            } else {
+                out->pu_Port = default_port;
+            }
+        }
         if (slash != NULL) {
             out->pu_Path = ht_strdup(slash);
             r = ht_strchr(slash, '?');
@@ -328,8 +326,7 @@ ht_url_encode(STRPTR str)
     }
     outlen = 1;
     for (i = 0; str[i] != '\0'; i++) {
-        if (isalnum((unsigned char)str[i]) || str[i] == '-' || str[i] == '_' ||
-            str[i] == '.' || str[i] == '~') {
+        if (ht_url_unreserved((UBYTE)str[i])) {
             outlen++;
         } else {
             outlen += 3;
@@ -341,8 +338,7 @@ ht_url_encode(STRPTR str)
     }
     o = 0;
     for (i = 0; str[i] != '\0'; i++) {
-        if (isalnum((unsigned char)str[i]) || str[i] == '-' || str[i] == '_' ||
-            str[i] == '.' || str[i] == '~') {
+        if (ht_url_unreserved((UBYTE)str[i])) {
             out[o++] = str[i];
         } else {
             out[o++] = '%';

@@ -5,10 +5,12 @@
  * httpcch.c - Cache-Control directive parsing (RFC 9111 subset).
  */
 
+#define __USE_SYSBASE
+
 #include <exec/types.h>
-#include <ctype.h>
-#include <stdio.h>
-#include <string.h>
+
+#include <proto/dos.h>
+#include <proto/utility.h>
 
 #include <libraries/amihttp.h>
 
@@ -26,39 +28,14 @@ Http_cc_reset_accum(struct Http_cc_accum *a)
     a->min_max_age = -1;
 }
 
-static int
-ht_strniequal(const char *a, const char *b, int n)
-{
-    int i;
-
-    for (i = 0; i < n; i++) {
-        char ca;
-        char cb;
-        if (a[i] == '\0' || b[i] == '\0') {
-            return 0;
-        }
-        ca = a[i];
-        cb = b[i];
-        if (ca >= 'A' && ca <= 'Z') {
-            ca = (char)(ca + ('a' - 'A'));
-        }
-        if (cb >= 'A' && cb <= 'Z') {
-            cb = (char)(cb + ('a' - 'A'));
-        }
-        if (ca != cb) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 void
 Http_cc_parse(STRPTR v, struct Http_cc_accum *z)
 {
     STRPTR h;
     STRPTR eq;
-    long n;
-    long line_min;
+    LONG n;
+    LONG line_min;
+    LONG consumed;
 
     Http_cc_reset_accum(z);
     if (v == NULL) {
@@ -66,22 +43,25 @@ Http_cc_parse(STRPTR v, struct Http_cc_accum *z)
     }
     line_min = -1;
     for (h = v; *h != '\0'; h++) {
-        if (ht_strniequal((const char *)h, "must-revalidate", 15)) {
-            if (h[15] == '\0' || h[15] == ',' || isspace((unsigned char)h[15])) {
+        if (Strnicmp(h, (STRPTR)"must-revalidate", 15) == 0) {
+            if (h[15] == '\0' || h[15] == ',' ||
+                h[15] == ' ' || h[15] == '\t' || h[15] == '\r' || h[15] == '\n') {
                 z->must_revalidate = TRUE;
             }
         }
-        if (ht_strniequal((const char *)h, "no-store", 8)) {
-            if (h[8] == '\0' || h[8] == ',' || isspace((unsigned char)h[8])) {
+        if (Strnicmp(h, (STRPTR)"no-store", 8) == 0) {
+            if (h[8] == '\0' || h[8] == ',' ||
+                h[8] == ' ' || h[8] == '\t' || h[8] == '\r' || h[8] == '\n') {
                 z->forbid_disk = TRUE;
             }
         }
-        if (ht_strniequal((const char *)h, "no-cache", 8)) {
-            if (h[8] == '\0' || h[8] == ',' || isspace((unsigned char)h[8])) {
+        if (Strnicmp(h, (STRPTR)"no-cache", 8) == 0) {
+            if (h[8] == '\0' || h[8] == ',' ||
+                h[8] == ' ' || h[8] == '\t' || h[8] == '\r' || h[8] == '\n') {
                 z->forbid_disk = TRUE;
             }
         }
-        if (ht_strniequal((const char *)h, "max-age", 7)) {
+        if (Strnicmp(h, (STRPTR)"max-age", 7) == 0) {
             eq = h + 7;
             while (*eq == ' ' || *eq == '\t') {
                 eq++;
@@ -94,7 +74,8 @@ Http_cc_parse(STRPTR v, struct Http_cc_accum *z)
                 eq++;
             }
             n = -999999;
-            if (sscanf((const char *)eq, "%ld", &n) != 1) {
+            consumed = StrToLong(eq, &n);
+            if (consumed < 1) {
                 continue;
             }
             if (n <= 0) {

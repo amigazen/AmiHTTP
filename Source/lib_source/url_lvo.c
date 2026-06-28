@@ -10,8 +10,8 @@
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <exec/lists.h>
-#include <stdio.h>
-#include <string.h>
+
+#include <proto/utility.h>
 
 #include <libraries/amihttp.h>
 
@@ -57,45 +57,15 @@ __ASM__ __SAVE_DS__ BuildHttpUrl(
     __REG__(a0, struct ParsedUrl *url))
 {
     STRPTR out;
-    ULONG len;
-    STRPTR scheme;
-    ULONG port;
 
     if (url == NULL || url->pu_Host == NULL) {
         ht_set_error(ERROR_HTTP_INVALID_URL);
         return NULL;
     }
-    scheme = url->pu_Scheme;
-    if (scheme == NULL) {
-        scheme = url->pu_IsSecure ? (STRPTR)"https" : (STRPTR)"http";
-    }
-    port = url->pu_Port;
-    len = (ULONG)strlen((char *)scheme) + (ULONG)strlen((char *)url->pu_Host) + 32;
-    if (url->pu_Path) {
-        len += (ULONG)strlen((char *)url->pu_Path);
-    }
-    if (url->pu_Query) {
-        len += (ULONG)strlen((char *)url->pu_Query) + 1;
-    }
-    out = (STRPTR)ht_alloc(len, MEMF_CLEAR);
+    out = ht_url_build_from_parsed(url);
     if (out == NULL) {
         ht_set_error(ERROR_HTTP_OUT_OF_MEMORY);
         return NULL;
-    }
-    if (port != 0 &&
-        !((url->pu_IsSecure && port == 443) || (!url->pu_IsSecure && port == 80))) {
-        sprintf((char *)out, "%s://%s:%lu", scheme, url->pu_Host, port);
-    } else {
-        sprintf((char *)out, "%s://%s", scheme, url->pu_Host);
-    }
-    if (url->pu_Path != NULL) {
-        strcat((char *)out, (char *)url->pu_Path);
-    } else {
-        strcat((char *)out, "/");
-    }
-    if (url->pu_Query != NULL && url->pu_Query[0] != '\0') {
-        strcat((char *)out, "?");
-        strcat((char *)out, (char *)url->pu_Query);
     }
     ht_set_error(0);
     return out;

@@ -36,8 +36,6 @@ extern struct Library *TlsBase;
 #include <amihttp/amihttpbase.h>
 #include <libraries/amihttp.h>
 
-#include <string.h>
-
 #include "private/ht_debug.h"
 #include "private/ht_internal.h"
 #include "private/ht_hooks.h"
@@ -465,7 +463,6 @@ ht_ssl_capture_peer_cert(struct HtSsl *s)
     if (s == NULL || s->hs_TlsConn == NULL) {
         return;
     }
-    memset(&cert, 0, sizeof(cert));
     if (TlsGetPeerCert(s->hs_TlsConn, &cert) != 0) {
         return;
     }

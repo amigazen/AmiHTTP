@@ -9,7 +9,6 @@
 
 #include <exec/types.h>
 #include <exec/memory.h>
-#include <string.h>
 
 #include <proto/exec.h>
 #include <proto/z.h>
@@ -23,6 +22,22 @@
 
 extern struct Library *ZBase;
 extern struct AmiHttpBase *HttpBase;
+
+static ULONG ht_zstream_clear[(sizeof(z_stream) + 3) / 4];
+
+static VOID
+ht_zstream_zero(z_stream *zs)
+{
+    ULONG words;
+
+    if (zs == NULL) {
+        return;
+    }
+    words = (ULONG)(sizeof(z_stream) / 4);
+    if (words > 0) {
+        CopyMemQuick(ht_zstream_clear, (ULONG *)zs, words * 4);
+    }
+}
 
 BOOL
 ht_zlib_ensure(struct AmiHttpBase *base)
@@ -60,7 +75,7 @@ ht_zlib_inflate_begin(struct HttpTransaction *txn, LONG windowBits)
     if (HttpBase == NULL || !ht_zlib_ensure(HttpBase)) {
         return ERROR_HTTP_NOT_IMPLEMENTED;
     }
-    memset(&txn->ht_ZStream, 0, sizeof(txn->ht_ZStream));
+    ht_zstream_zero(&txn->ht_ZStream);
     /* zalloc/zfree left NULL: z.library routes through its pooled malloc.c */
     rc = InflateInit2(&txn->ht_ZStream, windowBits);
     if (rc != Z_OK) {
@@ -97,7 +112,7 @@ ht_zlib_inflate_end(struct HttpTransaction *txn)
         return;
     }
     InflateEnd(&txn->ht_ZStream);
-    memset(&txn->ht_ZStream, 0, sizeof(txn->ht_ZStream));
+    ht_zstream_zero(&txn->ht_ZStream);
     txn->ht_ZInited = FALSE;
     if (txn->ht_ZWireBuf != NULL) {
         ht_free(txn->ht_ZWireBuf);

@@ -11,11 +11,9 @@
 #include <exec/memory.h>
 #include <exec/lists.h>
 #include <exec/tasks.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
 
 #include <proto/exec.h>
+#include <proto/utility.h>
 
 #include <amihttp/amihttpbase.h>
 #include <libraries/amihttp.h>
@@ -131,7 +129,7 @@ ht_txn_finalize_request_body(struct HttpTransaction *txn)
     if (copy == NULL) {
         return;
     }
-    memcpy(copy, txn->ht_ReqBodySrc, len);
+    CopyMem(txn->ht_ReqBodySrc, copy, len);
     txn->ht_PostBody = copy;
     txn->ht_ReqBodySrc = NULL;
 }
@@ -518,7 +516,7 @@ __ASM__ __SAVE_DS__ SetHttpTransactionAttrsA(
             txn->ht_PostBodyBinary = FALSE;
             txn->ht_PostBody = ht_strdup((STRPTR)t->ti_Data);
             if (txn->ht_PostBody != NULL) {
-                txn->ht_PostLength = (ULONG)strlen((char *)txn->ht_PostBody);
+                txn->ht_PostLength = ht_strlen((STRPTR)txn->ht_PostBody);
             }
             break;
         case HTTA_REQUEST_BODY:
@@ -905,7 +903,7 @@ __ASM__ __SAVE_DS__ HttpTransactionRespHeader(
     for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
          hh != NULL && hh->hh_Node.ln_Succ != NULL;
          hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
-        if (hh->hh_Name != NULL && stricmp((char *)hh->hh_Name, (char *)header_name) == 0) {
+        if (hh->hh_Name != NULL && Stricmp(hh->hh_Name, header_name) == 0) {
             return hh->hh_Value;
         }
     }
@@ -934,7 +932,7 @@ __ASM__ __SAVE_DS__ HttpTransactionRespHeaderNext(
         if (hh->hh_Name == NULL || hh->hh_Value == NULL) {
             continue;
         }
-        if (stricmp((char *)hh->hh_Name, (char *)header_name) != 0) {
+        if (Stricmp(hh->hh_Name, header_name) != 0) {
             continue;
         }
         if (!past_prev) {
@@ -999,9 +997,9 @@ __ASM__ __SAVE_DS__ HttpTransactionGetCipher(
         buf[0] = '\0';
         return 0;
     }
-    strncpy((char *)buf, (char *)txn->ht_Cipher, buflen - 1);
+    Strncpy((STRPTR)buf, (STRPTR)txn->ht_Cipher, buflen - 1);
     buf[buflen - 1] = '\0';
-    n = (ULONG)strlen((char *)buf);
+    n = ht_strlen((STRPTR)buf);
     return (LONG)n;
 }
 

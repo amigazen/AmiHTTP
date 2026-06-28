@@ -354,6 +354,7 @@ struct HtConnection *ht_connection_new(struct AmiHttpBase *base);
 VOID ht_connection_free(struct AmiHttpBase *base, struct HtConnection *conn);
 
 /* ht_url.c */
+STRPTR ht_url_build_from_parsed(struct ParsedUrl *url);
 LONG ht_url_parse(STRPTR url, struct ParsedUrl *out);
 VOID ht_url_free_fields(struct ParsedUrl *pu);
 STRPTR ht_url_encode(STRPTR str);

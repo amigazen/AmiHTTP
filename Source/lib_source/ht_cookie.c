@@ -11,8 +11,6 @@
 #include <exec/memory.h>
 #include <exec/lists.h>
 #include <exec/semaphores.h>
-#include <ctype.h>
-#include <string.h>
 
 #include <proto/exec.h>
 #include <proto/utility.h>
@@ -31,65 +29,6 @@ struct HtCookie
     STRPTR      hc_Path;
     BOOL        hc_Secure;
 };
-
-static int
-ht_str_ieq(STRPTR a, STRPTR b)
-{
-    char ca;
-    char cb;
-
-    if (a == NULL || b == NULL) {
-        return 0;
-    }
-    while (*a != '\0' && *b != '\0') {
-        ca = *a++;
-        cb = *b++;
-        if (ca >= 'A' && ca <= 'Z') {
-            ca = (char)(ca + ('a' - 'A'));
-        }
-        if (cb >= 'A' && cb <= 'Z') {
-            cb = (char)(cb + ('a' - 'A'));
-        }
-        if (ca != cb) {
-            return 0;
-        }
-    }
-    return (*a == '\0' && *b == '\0');
-}
-
-/*
- * Case-insensitive compare of alen bytes at a to NUL-terminated b.
- * Used for Set-Cookie attribute names (Domain, Path, Secure) where the
- * wire form is not NUL-terminated between '=' and ';'.
- */
-static int
-ht_str_ieq_len(STRPTR a, LONG alen, STRPTR b)
-{
-    char ca;
-    char cb;
-    LONG i;
-
-    if (a == NULL || b == NULL || alen < 0) {
-        return 0;
-    }
-    for (i = 0; i < alen; i++) {
-        ca = a[i];
-        cb = b[i];
-        if (cb == '\0') {
-            return 0;
-        }
-        if (ca >= 'A' && ca <= 'Z') {
-            ca = (char)(ca + ('a' - 'A'));
-        }
-        if (cb >= 'A' && cb <= 'Z') {
-            cb = (char)(cb + ('a' - 'A'));
-        }
-        if (ca != cb) {
-            return 0;
-        }
-    }
-    return (b[alen] == '\0');
-}
 
 static VOID
 ht_cookie_free_one(struct HtCookie *ck)
@@ -158,15 +97,15 @@ ht_cookie_domain_match(STRPTR ckdomain, STRPTR host)
     if (ckdomain == NULL || host == NULL) {
         return TRUE;
     }
-    if (ht_str_ieq(ckdomain, host)) {
+    if (Stricmp(ckdomain, host) == 0) {
         return TRUE;
     }
-    if (ckdomain[0] == '.' && ht_str_ieq(ckdomain + 1, host)) {
+    if (ckdomain[0] == '.' && Stricmp(ckdomain + 1, host) == 0) {
         return TRUE;
     }
     l1 = ht_strlen(ckdomain);
     l2 = ht_strlen(host);
-    if (l2 > l1 && ht_str_ieq(host + l2 - l1, ckdomain)) {
+    if (l2 > l1 && Stricmp(host + l2 - l1, ckdomain) == 0) {
         if (l2 == l1 || host[l2 - l1 - 1] == '.') {
             return TRUE;
         }
@@ -192,8 +131,14 @@ ht_cookie_path_match(STRPTR ckpath, STRPTR reqpath)
     if (orglen < len) {
         return FALSE;
     }
-    if (memcmp(ckpath, reqpath, len) != 0) {
-        return FALSE;
+    {
+        ULONG i;
+
+        for (i = 0; i < len; i++) {
+            if (ckpath[i] != reqpath[i]) {
+                return FALSE;
+            }
+        }
     }
     if (orglen == len) {
         return TRUE;
@@ -215,9 +160,9 @@ ht_cookie_remove_match(struct HttpCookieJar *jar, STRPTR domain, STRPTR path,
          ck != NULL && ck->hc_Node.ln_Succ != NULL;
          ck = next) {
         next = (struct HtCookie *)ck->hc_Node.ln_Succ;
-        if (ht_str_ieq(ck->hc_Name, name) &&
-            ht_str_ieq(ck->hc_Domain, domain) &&
-            ht_str_ieq(ck->hc_Path, path)) {
+        if (Stricmp(ck->hc_Name, name) == 0 &&
+            Stricmp(ck->hc_Domain, domain) == 0 &&
+            Stricmp(ck->hc_Path, path) == 0) {
             Remove(&ck->hc_Node);
             ht_cookie_free_one(ck);
         }
@@ -355,17 +300,17 @@ ht_cookie_store_line(struct HttpCookieJar *jar, STRPTR url, STRPTR spec,
         if (*attr_end == '=') {
             attr_len = (LONG)(attr_end - attr);
             p = attr_end + 1;
-            if (ht_str_ieq_len(attr, attr_len, (STRPTR)"Domain")) {
+            if (Strnicmp(attr, (STRPTR)"Domain", attr_len) == 0 && attr_len == 6) {
                 if (ck->hc_Domain) {
                     ht_free(ck->hc_Domain);
                 }
                 ck->hc_Domain = ht_cookie_attr_value(p, &p);
-            } else if (ht_str_ieq_len(attr, attr_len, (STRPTR)"Path")) {
+            } else if (Strnicmp(attr, (STRPTR)"Path", attr_len) == 0 && attr_len == 4) {
                 if (ck->hc_Path) {
                     ht_free(ck->hc_Path);
                 }
                 ck->hc_Path = ht_cookie_attr_value(p, &p);
-            } else if (ht_str_ieq_len(attr, attr_len, (STRPTR)"Secure")) {
+            } else if (Strnicmp(attr, (STRPTR)"Secure", attr_len) == 0 && attr_len == 6) {
                 ck->hc_Secure = TRUE;
                 while (*p != '\0' && *p != ';') {
                     p++;
@@ -377,7 +322,7 @@ ht_cookie_store_line(struct HttpCookieJar *jar, STRPTR url, STRPTR spec,
             }
         } else {
             attr_len = (LONG)(attr_end - attr);
-            if (ht_str_ieq_len(attr, attr_len, (STRPTR)"Secure")) {
+            if (Strnicmp(attr, (STRPTR)"Secure", attr_len) == 0 && attr_len == 6) {
                 ck->hc_Secure = TRUE;
             }
             p = attr_end;
@@ -468,11 +413,21 @@ ht_cookie_header_for_url(struct HttpCookieJar *jar, STRPTR url, BOOL secure)
             *p++ = ';';
             *p++ = ' ';
         }
-        strcpy((char *)p, (char *)ck->hc_Name);
-        p += ht_strlen(ck->hc_Name);
+        {
+            ULONG nlen;
+
+            nlen = ht_strlen(ck->hc_Name);
+            CopyMem(ck->hc_Name, p, nlen);
+            p += nlen;
+        }
         *p++ = '=';
-        strcpy((char *)p, (char *)ck->hc_Value);
-        p += ht_strlen(ck->hc_Value);
+        {
+            ULONG vlen;
+
+            vlen = ht_strlen(ck->hc_Value);
+            CopyMem(ck->hc_Value, p, vlen);
+            p += vlen;
+        }
         first = FALSE;
     }
     *p = '\0';
@@ -495,7 +450,7 @@ ht_cookie_ingest_headers(struct HttpCookieJar *jar, struct HttpTransaction *txn)
          hh != NULL && hh->hh_Node.ln_Succ != NULL;
          hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
         if (hh->hh_Name != NULL && hh->hh_Value != NULL &&
-            ht_str_ieq(hh->hh_Name, (STRPTR)"Set-Cookie")) {
+            Stricmp(hh->hh_Name, (STRPTR)"Set-Cookie") == 0) {
             ht_cookie_store_line(jar, url, hh->hh_Value, TRUE);
         }
     }
@@ -512,7 +467,7 @@ ht_cookie_resp_header_value(struct HttpTransaction *txn, STRPTR name)
     for (hh = (struct HttpHeader *)txn->ht_RespHeaders.lh_Head;
          hh != NULL && hh->hh_Node.ln_Succ != NULL;
          hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
-        if (hh->hh_Name != NULL && ht_str_ieq(hh->hh_Name, name)) {
+        if (hh->hh_Name != NULL && Stricmp(hh->hh_Name, name) == 0) {
             return hh->hh_Value;
         }
     }
@@ -550,9 +505,12 @@ ht_cookie_append_request(struct HttpCookieJar *jar, struct HttpTransaction *txn,
         ht_free(val);
         return ERROR_HTTP_OUT_OF_MEMORY;
     }
-    strcat((char *)buf, "Cookie: ");
-    strcat((char *)buf, (char *)val);
-    strcat((char *)buf, "\r\n");
+    {
+        ULONG used;
+
+        used = ht_strlen(buf);
+        SNPrintf(buf + used, buflen, (CONST_STRPTR)"Cookie: %s\r\n", val);
+    }
     ht_free(val);
     return 0;
 }
@@ -577,7 +535,7 @@ ht_cookie_dispatch_response(struct HttpCookieJar *jar,
              hh != NULL && hh->hh_Node.ln_Succ != NULL;
              hh = (struct HttpHeader *)hh->hh_Node.ln_Succ) {
             if (hh->hh_Name != NULL && hh->hh_Value != NULL &&
-                ht_str_ieq(hh->hh_Name, (STRPTR)"Set-Cookie")) {
+                Stricmp(hh->hh_Name, (STRPTR)"Set-Cookie") == 0) {
                 msg.hcs_SetCookieLine = hh->hh_Value;
                 (void)CallHookPkt(jar->hj_ResponseHook, NULL, (APTR)&msg);
             }

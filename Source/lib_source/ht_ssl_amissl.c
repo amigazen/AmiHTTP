@@ -41,9 +41,7 @@ extern struct Library *SocketBase;
 #include <amihttp/amihttpbase.h>
 #include <libraries/amihttp.h>
 #include <proto/bsdsocket.h>
-
-#include <string.h>
-#include <stdio.h>
+#include <proto/utility.h>
 
 #include "private/ht_debug.h"
 #include "private/ht_internal.h"
@@ -369,11 +367,19 @@ ht_ssl_extract_cn(STRPTR oneline)
     if (oneline == NULL) {
         return NULL;
     }
-    p = strstr((const char *)oneline, "/CN=");
-    if (p == NULL) {
-        p = strstr((const char *)oneline, ", CN=");
+    for (p = oneline; *p != '\0'; p++) {
+        if (Strnicmp(p, (STRPTR)"/CN=", 4) == 0) {
+            break;
+        }
     }
-    if (p == NULL) {
+    if (*p == '\0') {
+        for (p = oneline; *p != '\0'; p++) {
+            if (Strnicmp(p, (STRPTR)", CN=", 5) == 0) {
+                break;
+            }
+        }
+    }
+    if (*p == '\0') {
         return NULL;
     }
     start = p;

@@ -10,10 +10,10 @@
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <exec/tasks.h>
-#include <string.h>
 
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <proto/utility.h>
 
 #include <dos/dostags.h>
 
@@ -101,7 +101,7 @@ ht_async_start(struct HttpTransaction *txn)
     }
     job->hj_Txn = txn;
     job->hj_Base = HttpBase;
-    strcpy((char *)name, "amihttp");
+    Strncpy((STRPTR)name, (CONST_STRPTR)"amihttp", (ULONG)sizeof(name));
     task = (struct Task *)CreateNewProcTags(
         NP_Entry, (ULONG)ht_async_worker,
         NP_StackSize, (ULONG)HT_ASYNC_STACK,
