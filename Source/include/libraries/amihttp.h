@@ -107,6 +107,12 @@ struct ParsedUrl;
 #define HTSA_FOLLOW_REDIRECTS       (TAG_USER + 0x106)
 #define HTSA_ACCEPT_ENCODING        (TAG_USER + 0x107)
 #define HTSA_KEEPALIVE              (TAG_USER + 0x108)
+/*
+ * When TRUE (default for NewHttpSession), idle connections are pooled per
+ * HttpSession for reuse on the same host/scheme/port.  amitls builds also
+ * share one TlsContext per session so PEM trust and verify policy load once.
+ * Set FALSE when using CONNECT proxies (amihttp disables pooling internally).
+ */
 #define HTSA_MAX_CONNECTIONS        (TAG_USER + 0x109)
 #define HTSA_CONNECT_TIMEOUT        (TAG_USER + 0x10A)
 #define HTSA_READ_TIMEOUT           (TAG_USER + 0x10B)
@@ -248,6 +254,28 @@ struct HttpHookCertVerify
     struct HttpSslPeerCert  hcv_Cert;
     LONG                    hcv_VerifyResult;
     BOOL                    hcv_Accept;
+};
+
+/*
+ * HTHK_PROGRESS — bytes received so far; hpp_ContentLength is -1 when unknown.
+ */
+struct HttpHookProgress
+{
+    struct HttpTransaction *hpp_Transaction;
+    ULONG                   hpp_BytesReceived;
+    LONG                    hpp_ContentLength;
+};
+
+/*
+ * HTHK_REDIRECT — before following a 3xx; clear hrh_Follow to leave status visible.
+ */
+struct HttpHookRedirect
+{
+    struct HttpTransaction *hrh_Transaction;
+    LONG                    hrh_StatusCode;
+    STRPTR                  hrh_FromUrl;
+    STRPTR                  hrh_ToUrl;
+    BOOL                    hrh_Follow;
 };
 
 /*

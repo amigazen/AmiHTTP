@@ -362,8 +362,10 @@ ht_txn_perform_once(struct HttpTransaction *txn)
         return HttpBase ? HttpBase->ahb_LastError : ERROR_HTTP_CONNECT_FAILED;
     }
     if (txn->ht_Conn->hc_Flags & HTF_CONN_REUSED) {
+        txn->ht_Flags |= HTF_KA_REUSED;
         ht_timing_connect_done(txn, TRUE);
     } else {
+        txn->ht_Flags &= ~HTF_KA_REUSED;
         ht_timing_connect_done(txn, FALSE);
     }
     htDbgPut("ht_txn_perform_once send_request");
@@ -676,6 +678,7 @@ ht_txn_perform_sync(struct HttpTransaction *txn)
     }
     htDbgPut("ht_txn_perform_sync");
     ht_timing_begin_sync(txn);
+    txn->ht_Flags &= ~(HTF_KA_REUSED | HTF_KA_RETRYED);
     redirects = 0;
     for (;;) {
         if (ht_check_txn_abort(txn)) {
@@ -685,6 +688,16 @@ ht_txn_perform_sync(struct HttpTransaction *txn)
         }
         rc = ht_txn_perform_once(txn);
         if (rc != 0) {
+            if ((txn->ht_Flags & HTF_KA_REUSED) &&
+                !(txn->ht_Flags & HTF_KA_RETRYED) &&
+                (rc == ERROR_HTTP_READ_FAILED || rc == ERROR_HTTP_WRITE_FAILED ||
+                 rc == ERROR_HTTP_CONNECT_FAILED || rc == ERROR_HTTP_READ_TIMEOUT ||
+                 rc == ERROR_HTTP_PROTOCOL)) {
+                txn->ht_Flags |= HTF_KA_RETRYED;
+                txn->ht_Flags &= ~HTF_KA_REUSED;
+                ht_txn_clear_resp_state(txn);
+                continue;
+            }
             if (rc == ERROR_HTTP_SSL_VERIFY && txn->ht_RetryCert &&
                 !txn->ht_CertRetryTried) {
                 txn->ht_CertRetryTried = TRUE;
@@ -744,6 +757,10 @@ ht_txn_perform_sync(struct HttpTransaction *txn)
             break;
         }
         if (txn->ht_RedirectUrl == NULL || txn->ht_RedirectUrl[0] == '\0') {
+            break;
+        }
+        if (!ht_hook_redirect(txn, txn->ht_StatusCode, txn->ht_Url,
+            txn->ht_RedirectUrl)) {
             break;
         }
         redirects++;

@@ -431,6 +431,10 @@ ht_transport_connect_route(struct AmiHttpBase *base, struct HtConnection *conn,
     }
     conn->hc_IsSsl = use_ssl;
     if (use_ssl) {
+        /*
+         * HTTPS CONNECT tunnel: same deferred-handshake rules as direct TLS in
+         * ht_transport_connect (ht_ssl_amitls.c file header).  No FIONBIO here.
+         */
         if (conn->hc_SslCtx != NULL) {
             ht_ssl_close(conn->hc_SslCtx);
             ht_ssl_destroy(conn->hc_SslCtx);

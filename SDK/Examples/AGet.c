@@ -937,9 +937,11 @@ ag_test_url_utils(STRPTR url)
     STRPTR qstr;
 
     ag_step_log("URL: ParseHttpUrl invalid");
-    bad = ParseHttpUrl((STRPTR)"not-a-valid-url");
-    ag_log_ptr("ParseHttpUrl(bad)", "pu", bad);
+    /* Empty string is invalid; scheme-less "host" strings are valid http URLs. */
+    bad = ParseHttpUrl((STRPTR)"");
+    ag_log_ptr("ParseHttpUrl(empty)", "pu", bad);
     ag_test_expect_null("ParseHttpUrl(invalid)", bad);
+    ag_test_expect_http_error("ParseHttpUrl(empty)", ERROR_HTTP_INVALID_URL);
 
     ag_step_log("URL: ParseHttpUrl");
     pu = ParseHttpUrl(url);

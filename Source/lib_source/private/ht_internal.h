@@ -56,6 +56,8 @@
 #define HTF_COMPLETE        0x0080
 #define HTF_ABORTED         0x0100
 #define HTF_CONN_REUSED     0x0200
+#define HTF_KA_REUSED       0x2000
+#define HTF_KA_RETRYED      0x4000
 #define HTF_BODY_BUFFERED   0x0400
 #define HTF_BODY_DONE       0x0800
 #define HTF_VIA_PROXY       0x1000
@@ -119,12 +121,14 @@ struct HtStreamConn
 struct HtConnection
 {
     struct Node         hc_Node;
+    struct Node         hc_ActiveNode;
     ULONG               hc_Magic;
     STRPTR              hc_Host;
     ULONG               hc_Port;
     BOOL                hc_IsSsl;
     ULONG               hc_OwnerSerial;
     LONG                hc_Sock;
+    struct Library     *hc_SocketBase; /* bsdsocket handle snapshot at connect */
     struct HtSsl       *hc_SslCtx;
     ULONG               hc_LastUsed;
     BOOL                hc_InUse;
@@ -418,6 +422,8 @@ VOID ht_timing_connect_done(struct HttpTransaction *txn, BOOL reused);
 VOID ht_timing_first_byte(struct HttpTransaction *txn);
 VOID ht_timing_no_body_done(struct HttpTransaction *txn);
 VOID ht_timing_body_done(struct HttpTransaction *txn);
+ULONG ht_timing_elapsed_ms(struct HttpTransaction *txn);
+ULONG ht_timeout_resolve(struct HttpTransaction *txn, ULONG per_op_secs);
 
 /* session.c / transaction.c - LVO bodies declared in amihttp_funcs.h */
 

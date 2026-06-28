@@ -7,6 +7,21 @@
  * bsdsocket.library is opened per Exec task (many stacks are task-affine).
  * AWeb retrieve subprocesses bind an Opentcp() handle via HTBT_TASK_SOCKETBASE;
  * standalone clients (AGet) lazily open a handle on first I/O.
+ *
+ * --- TLS connect path: DO NOT CHANGE (verified AGet HTTPS, Jun 2026) ---
+ *
+ * ht_transport_connect(ssl): wrap TlsTaskAttach + TlsAttachSocket in
+ * ht_io_obtain()/ht_io_release() so SocketBase matches this task's handle.
+ * Do not skip that pair or replace ht_io_obtain with non-blocking sema
+ * attempts only — attach without a bound task regressed 8704.
+ *
+ * Do not apply SO_RCVTIMEO/SO_SNDTIMEO to the fd before TLS handshake completes
+ * (see ht_transport_apply_io_timeouts comment).  Do not FIONBIO the TLS fd at
+ * connect; blocking TCP + deferred TlsWrite matches ATlsTest.
+ *
+ * ht_transport_send(TLS): do not wrap ht_ssl_send in ahb_SocketSema; parallel
+ * Httptask subprocesses would serialize and appear deadlocked.  amitls snapshots
+ * per-connection SocketBase after TlsTaskAttach.
  */
 
 #define __USE_SYSBASE
@@ -449,6 +464,12 @@ ht_io_obtain(struct AmiHttpBase *base)
 {
     LONG rc;
 
+    /*
+     * Pairs with ht_io_release().  TLS attach/wait paths rely on ObtainSemaphore
+     * + ht_task_bsd_activate() so WaitSelect/send/recv use the correct handle.
+     * Do not release the sema before attach-only work completes (see ssl block
+     * in ht_transport_connect).
+     */
     if (base == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
     }
@@ -735,6 +756,10 @@ ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
     conn->hc_Host = ht_strdup(host);
 
     if (ssl) {
+        /*
+         * TlsTaskAttach + TlsAttachSocket must run under ht_io_obtain (see file
+         * header).  Handshake is deferred to ht_transport_send -> ht_ssl_send.
+         */
         rc = ht_io_obtain(base);
         if (rc != 0) {
             ht_transport_disconnect(base, conn);

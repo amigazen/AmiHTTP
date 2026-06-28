@@ -176,6 +176,54 @@ ht_host_match(STRPTR a, STRPTR b)
     return (BOOL)(*a == '\0' && *b == '\0');
 }
 
+static VOID
+ht_pool_active_add(struct AmiHttpBase *base, struct HtConnection *conn)
+{
+    if (base == NULL || conn == NULL) {
+        return;
+    }
+    ObtainSemaphore(&base->ahb_PoolSema);
+    AddTail(&base->ahb_ActiveList, &conn->hc_ActiveNode);
+    ReleaseSemaphore(&base->ahb_PoolSema);
+}
+
+static VOID
+ht_pool_active_remove(struct AmiHttpBase *base, struct HtConnection *conn)
+{
+    if (base == NULL || conn == NULL) {
+        return;
+    }
+    ObtainSemaphore(&base->ahb_PoolSema);
+    if (conn->hc_ActiveNode.ln_Succ != NULL ||
+        conn->hc_ActiveNode.ln_Pred != NULL) {
+        Remove(&conn->hc_ActiveNode);
+    }
+    ReleaseSemaphore(&base->ahb_PoolSema);
+}
+
+static ULONG
+ht_pool_active_host_count(struct AmiHttpBase *base, ULONG owner,
+    STRPTR host, ULONG port, BOOL ssl)
+{
+    struct HtConnection *c;
+    ULONG n;
+
+    n = 0UL;
+    for (c = (struct HtConnection *)base->ahb_ActiveList.lh_Head;
+         c != NULL && c->hc_ActiveNode.ln_Succ != NULL;
+         c = (struct HtConnection *)c->hc_ActiveNode.ln_Succ) {
+        if (!c->hc_InUse || c->hc_OwnerSerial != owner ||
+            c->hc_Port != port || c->hc_IsSsl != ssl ||
+            c->hc_Host == NULL) {
+            continue;
+        }
+        if (ht_host_match(c->hc_Host, host)) {
+            n++;
+        }
+    }
+    return n;
+}
+
 struct HtConnection *
 ht_connection_new(struct AmiHttpBase *base)
 {
@@ -238,6 +286,7 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
     ULONG max_idle;
     ULONG idle_timeout;
     ULONG timeout;
+    ULONG active_count;
     STRPTR ca_bundle_path;
     LONG rc;
 
@@ -292,7 +341,13 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
                         conn->hc_LastUsed = now;
                         conn->hc_IoLen = 0;
                         conn->hc_IoPos = 0;
-                        conn->hc_Flags |= HTF_CONN_REUSED;
+                        conn->hc_Flags = HTF_CONN_REUSED;
+                        if (conn->hc_ViaProxy) {
+                            conn->hc_Flags |= HTF_VIA_PROXY;
+                        }
+                        if (conn->hc_IsSsl) {
+                            conn->hc_Flags |= HTF_SSL;
+                        }
                         Remove(&conn->hc_Node);
                         found = conn;
                         break;
@@ -311,8 +366,19 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
             ht_pool_close_conn(base, conn);
         }
         if (found != NULL) {
+            ht_pool_active_add(base, found);
             htDbgPut("ht_pool_acquire reused");
             return found;
+        }
+    }
+    if (session->hs_MaxConnections > 0UL && !route->hr_ViaProxy) {
+        ObtainSemaphore(&base->ahb_PoolSema);
+        active_count = ht_pool_active_host_count(base, owner,
+            route->hr_OriginHost, route->hr_OriginPort, route->hr_OriginSsl);
+        ReleaseSemaphore(&base->ahb_PoolSema);
+        if (active_count >= session->hs_MaxConnections) {
+            ht_set_error(ERROR_HTTP_CONNECT_FAILED);
+            return NULL;
         }
     }
     conn = ht_connection_new(base);
@@ -342,6 +408,7 @@ ht_pool_acquire(struct AmiHttpBase *base, struct HttpSession *session,
         return NULL;
     }
     conn->hc_LastUsed = ht_current_seconds();
+    ht_pool_active_add(base, conn);
     return conn;
 }
 
@@ -356,6 +423,7 @@ ht_pool_release(struct AmiHttpBase *base, struct HtConnection *conn, BOOL keepal
     if (base == NULL || conn == NULL) {
         return;
     }
+    ht_pool_active_remove(base, conn);
     if (conn->hc_ViaProxy) {
         keepalive = FALSE;
     }

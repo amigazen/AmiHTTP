@@ -25,7 +25,11 @@ VOID ht_hook_headers_done(struct HttpTransaction *txn);
 VOID ht_hook_body_chunk(struct HttpTransaction *txn, APTR data, ULONG len);
 VOID ht_hook_complete(struct HttpTransaction *txn);
 VOID ht_hook_error(struct HttpTransaction *txn, LONG code);
-BOOL ht_hook_cert_verify(struct HttpTransaction *txn, struct HtSsl *ssl,
+VOID ht_hook_progress(struct HttpTransaction *txn, ULONG bytes_received,
+    LONG content_length);
+BOOL ht_hook_redirect(struct HttpTransaction *txn, LONG status_code,
+    STRPTR from_url, STRPTR to_url);
+BOOL ht_hook_cert_verify(struct HttpTransaction *txn, struct HtSsl *s,
     LONG verify_result);
 
 #endif /* AMIHTTP_PRIVATE_HT_HOOKS_H */

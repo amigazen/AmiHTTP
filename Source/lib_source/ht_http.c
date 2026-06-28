@@ -171,13 +171,16 @@ ht_conn_sync_body_start(struct HtConnection *conn, ULONG *body_start)
 
 static LONG
 ht_conn_fill(struct AmiHttpBase *base, struct HtConnection *conn,
-    ULONG timeout_secs)
+    ULONG timeout_secs, struct HttpTransaction *txn)
 {
     ULONG space;
     LONG n;
 
     if (conn->hc_IoBuf == NULL) {
         return ERROR_HTTP_OUT_OF_MEMORY;
+    }
+    if (txn != NULL && ht_check_txn_abort(txn)) {
+        return ERROR_HTTP_ABORTED;
     }
     ht_conn_compact(conn);
     if (conn->hc_IoCap == 0) {
@@ -187,6 +190,7 @@ ht_conn_fill(struct AmiHttpBase *base, struct HtConnection *conn,
     if (space == 0) {
         return ERROR_HTTP_PROTOCOL;
     }
+    timeout_secs = ht_timeout_resolve(txn, timeout_secs);
     n = ht_transport_recv(base, conn, conn->hc_IoBuf + conn->hc_IoLen,
         space, timeout_secs);
     if (n < 0) {
@@ -207,12 +211,12 @@ ht_conn_fill(struct AmiHttpBase *base, struct HtConnection *conn,
 
 static LONG
 ht_conn_ensure_bytes(struct AmiHttpBase *base, struct HtConnection *conn,
-    ULONG need, ULONG timeout_secs)
+    ULONG need, ULONG timeout_secs, struct HttpTransaction *txn)
 {
     LONG rc;
 
     while ((conn->hc_IoLen - conn->hc_IoPos) < need) {
-        rc = ht_conn_fill(base, conn, timeout_secs);
+        rc = ht_conn_fill(base, conn, timeout_secs, txn);
         if (rc != 0) {
             return rc;
         }
@@ -784,14 +788,14 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
     txn->ht_BytesReceived = 0;
     txn->ht_ChunkRemain = 0;
     txn->ht_Flags &= ~(HTF_CHUNKED | HTF_GZIP | HTF_BODY_DONE | HTF_BODY_BUFFERED);
-    rc = ht_conn_ensure_bytes(base, txn->ht_Conn, 1, timeout);
+    rc = ht_conn_ensure_bytes(base, txn->ht_Conn, 1, timeout, txn);
     if (rc != 0) {
         return rc;
     }
     ht_timing_first_byte(txn);
     rc = ht_find_crlf(txn->ht_Conn, &line_start, &line_len);
     while (rc == ERROR_HTTP_READ_TIMEOUT) {
-        rc = ht_conn_fill(base, txn->ht_Conn, timeout);
+        rc = ht_conn_fill(base, txn->ht_Conn, timeout, txn);
         if (rc != 0) {
             return rc;
         }
@@ -817,13 +821,13 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
         if (header_count >= HT_MAX_RESP_HEADERS) {
             return ERROR_HTTP_PROTOCOL;
         }
-        rc = ht_conn_ensure_bytes(base, txn->ht_Conn, 2, timeout);
+        rc = ht_conn_ensure_bytes(base, txn->ht_Conn, 2, timeout, txn);
         if (rc != 0) {
             return rc;
         }
         rc = ht_find_crlf(txn->ht_Conn, &line_start, &line_len);
         while (rc == ERROR_HTTP_READ_TIMEOUT) {
-            rc = ht_conn_fill(base, txn->ht_Conn, timeout);
+            rc = ht_conn_fill(base, txn->ht_Conn, timeout, txn);
             if (rc != 0) {
                 return rc;
             }
@@ -933,6 +937,7 @@ ht_http_read_response_headers(struct AmiHttpBase *base, struct HttpTransaction *
     }
     ht_conn_compact(txn->ht_Conn);
     ht_hook_headers_done(txn);
+    ht_hook_progress(txn, 0UL, txn->ht_ContentLength);
     return 0;
 }
 
@@ -1009,13 +1014,13 @@ ht_http_read_stream_headers(struct AmiHttpBase *base,
     ht_clear_header_list(resp_headers);
     *content_length = -1;
     *flags = 0;
-    rc = ht_conn_ensure_bytes(base, conn, 1, timeout);
+    rc = ht_conn_ensure_bytes(base, conn, 1, timeout, NULL);
     if (rc != 0) {
         return rc;
     }
     rc = ht_find_crlf(conn, &line_start, &line_len);
     while (rc == ERROR_HTTP_READ_TIMEOUT) {
-        rc = ht_conn_fill(base, conn, timeout);
+        rc = ht_conn_fill(base, conn, timeout, NULL);
         if (rc != 0) {
             return rc;
         }
@@ -1041,13 +1046,13 @@ ht_http_read_stream_headers(struct AmiHttpBase *base,
         if (header_count >= HT_MAX_RESP_HEADERS) {
             return ERROR_HTTP_PROTOCOL;
         }
-        rc = ht_conn_ensure_bytes(base, conn, 2, timeout);
+        rc = ht_conn_ensure_bytes(base, conn, 2, timeout, NULL);
         if (rc != 0) {
             return rc;
         }
         rc = ht_find_crlf(conn, &line_start, &line_len);
         while (rc == ERROR_HTTP_READ_TIMEOUT) {
-            rc = ht_conn_fill(base, conn, timeout);
+            rc = ht_conn_fill(base, conn, timeout, NULL);
             if (rc != 0) {
                 return rc;
             }
@@ -1110,12 +1115,16 @@ ht_http_read_stream_headers(struct AmiHttpBase *base,
  */
 static BOOL
 ht_conn_readblock(struct AmiHttpBase *base, struct HtConnection *conn,
-    ULONG timeout_secs)
+    ULONG timeout_secs, struct HttpTransaction *txn)
 {
     ULONG space;
     LONG n;
 
     if (conn == NULL || conn->hc_IoBuf == NULL) {
+        return FALSE;
+    }
+    if (txn != NULL && ht_check_txn_abort(txn)) {
+        ht_set_error(ERROR_HTTP_ABORTED);
         return FALSE;
     }
     ht_conn_compact(conn);
@@ -1126,6 +1135,7 @@ ht_conn_readblock(struct AmiHttpBase *base, struct HtConnection *conn,
     if (space == 0) {
         return FALSE;
     }
+    timeout_secs = ht_timeout_resolve(txn, timeout_secs);
     n = ht_transport_recv(base, conn, conn->hc_IoBuf + conn->hc_IoLen,
         space, timeout_secs);
     if (n < 0) {
@@ -1250,7 +1260,7 @@ ht_chunk_read_size(struct HtConnection *conn, ULONG *out_size, BOOL *out_final)
 
 static LONG
 ht_chunk_skip_data_crlf(struct AmiHttpBase *base, struct HtConnection *conn,
-    ULONG timeout_secs)
+    ULONG timeout_secs, struct HttpTransaction *txn)
 {
     ULONG avail;
     LONG rc;
@@ -1266,13 +1276,13 @@ ht_chunk_skip_data_crlf(struct AmiHttpBase *base, struct HtConnection *conn,
         return 0;
     }
     if (avail == 0) {
-        if (!ht_conn_readblock(base, conn, timeout_secs)) {
+        if (!ht_conn_readblock(base, conn, timeout_secs, txn)) {
             return ERROR_HTTP_READ_FAILED;
         }
-        return ht_chunk_skip_data_crlf(base, conn, timeout_secs);
+        return ht_chunk_skip_data_crlf(base, conn, timeout_secs, txn);
     }
     if (avail == 1 && conn->hc_IoBuf[conn->hc_IoPos] == '\r') {
-        if (!ht_conn_readblock(base, conn, timeout_secs)) {
+        if (!ht_conn_readblock(base, conn, timeout_secs, txn)) {
             return ERROR_HTTP_READ_FAILED;
         }
         if (conn->hc_IoPos < conn->hc_IoLen &&
@@ -1282,29 +1292,29 @@ ht_chunk_skip_data_crlf(struct AmiHttpBase *base, struct HtConnection *conn,
         }
         return ERROR_HTTP_PROTOCOL;
     }
-    rc = ht_conn_ensure_bytes(base, conn, 2, timeout_secs);
+    rc = ht_conn_ensure_bytes(base, conn, 2, timeout_secs, txn);
     if (rc != 0) {
         return rc;
     }
-    return ht_chunk_skip_data_crlf(base, conn, timeout_secs);
+    return ht_chunk_skip_data_crlf(base, conn, timeout_secs, txn);
 }
 
 static LONG
 ht_chunk_consume_trailers(struct AmiHttpBase *base, struct HtConnection *conn,
-    ULONG timeout_secs)
+    ULONG timeout_secs, struct HttpTransaction *txn)
 {
     ULONG line_start;
     ULONG line_len;
     LONG rc;
 
     for (;;) {
-        rc = ht_conn_ensure_bytes(base, conn, 2, timeout_secs);
+        rc = ht_conn_ensure_bytes(base, conn, 2, timeout_secs, txn);
         if (rc != 0) {
             return rc;
         }
         rc = ht_find_crlf(conn, &line_start, &line_len);
         while (rc == ERROR_HTTP_READ_TIMEOUT) {
-            if (!ht_conn_readblock(base, conn, timeout_secs)) {
+            if (!ht_conn_readblock(base, conn, timeout_secs, txn)) {
                 return ERROR_HTTP_READ_FAILED;
             }
             rc = ht_find_crlf(conn, &line_start, &line_len);
@@ -1348,7 +1358,7 @@ ht_http_read_body_chunked(struct AmiHttpBase *base, struct HttpTransaction *txn,
         if (txn->ht_ChunkRemain > 0) {
             avail = ht_chunk_avail(conn);
             if (avail == 0) {
-                if (!ht_conn_readblock(base, conn, timeout)) {
+                if (!ht_conn_readblock(base, conn, timeout, txn)) {
                     ht_set_txn_error(txn, ERROR_HTTP_READ_FAILED);
                     return (LONG)copied;
                 }
@@ -1368,9 +1378,10 @@ ht_http_read_body_chunked(struct AmiHttpBase *base, struct HttpTransaction *txn,
                 txn->ht_BytesReceived += take;
                 copied += take;
                 ht_hook_body_chunk(txn, out + copied - take, take);
+                ht_hook_progress(txn, txn->ht_BytesReceived, txn->ht_ContentLength);
             }
             if (txn->ht_ChunkRemain == 0) {
-                rc = ht_chunk_skip_data_crlf(base, conn, timeout);
+                rc = ht_chunk_skip_data_crlf(base, conn, timeout, txn);
                 if (rc != 0) {
                     ht_set_txn_error(txn, rc);
                     return (LONG)copied;
@@ -1380,7 +1391,7 @@ ht_http_read_body_chunked(struct AmiHttpBase *base, struct HttpTransaction *txn,
         }
         rc = ht_chunk_read_size(conn, &chunk_size, &final_chunk);
         while (rc == ERROR_HTTP_READ_TIMEOUT) {
-            if (!ht_conn_readblock(base, conn, timeout)) {
+            if (!ht_conn_readblock(base, conn, timeout, txn)) {
                 ht_set_txn_error(txn, ERROR_HTTP_READ_FAILED);
                 return (LONG)copied;
             }
@@ -1392,7 +1403,7 @@ ht_http_read_body_chunked(struct AmiHttpBase *base, struct HttpTransaction *txn,
         }
         if (final_chunk) {
             txn->ht_Flags &= ~HTF_CHUNKED;
-            rc = ht_chunk_consume_trailers(base, conn, timeout);
+            rc = ht_chunk_consume_trailers(base, conn, timeout, txn);
             if (rc != 0) {
                 ht_set_txn_error(txn, rc);
                 return (LONG)copied;
@@ -1493,7 +1504,7 @@ ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
             if (txn->ht_ChunkRemain > 0) {
                 avail = ht_chunk_avail(conn);
                 if (avail == 0) {
-                    if (!ht_conn_readblock(base, conn, timeout)) {
+                    if (!ht_conn_readblock(base, conn, timeout, txn)) {
                         return ht_compressed_read_failed((LONG)copied);
                     }
                     avail = ht_chunk_avail(conn);
@@ -1513,7 +1524,7 @@ ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
                     copied += take;
                 }
                 if (txn->ht_ChunkRemain == 0) {
-                    rc = ht_chunk_skip_data_crlf(base, conn, timeout);
+                    rc = ht_chunk_skip_data_crlf(base, conn, timeout, txn);
                     if (rc != 0) {
                         return (LONG)copied;
                     }
@@ -1522,7 +1533,7 @@ ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
             }
             rc = ht_chunk_read_size(conn, &chunk_size, &final_chunk);
             while (rc == ERROR_HTTP_READ_TIMEOUT) {
-                if (!ht_conn_readblock(base, conn, timeout)) {
+                if (!ht_conn_readblock(base, conn, timeout, txn)) {
                     return ht_compressed_read_failed((LONG)copied);
                 }
                 rc = ht_chunk_read_size(conn, &chunk_size, &final_chunk);
@@ -1532,7 +1543,7 @@ ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
             }
             if (final_chunk) {
                 txn->ht_Flags &= ~HTF_CHUNKED;
-                rc = ht_chunk_consume_trailers(base, conn, timeout);
+                rc = ht_chunk_consume_trailers(base, conn, timeout, txn);
                 if (rc != 0) {
                     return (LONG)copied;
                 }
@@ -1549,7 +1560,7 @@ ht_http_read_compressed(struct AmiHttpBase *base, struct HttpTransaction *txn,
             (LONG)txn->ht_WireReceived >= txn->ht_ContentLength) {
             return 0;
         }
-        if (!ht_conn_readblock(base, conn, timeout)) {
+        if (!ht_conn_readblock(base, conn, timeout, txn)) {
             if (txn->ht_ContentLength < 0) {
                 return 0;
             }
@@ -1637,6 +1648,7 @@ ht_http_read_body_gzip(struct AmiHttpBase *base, struct HttpTransaction *txn,
             txn->ht_DecodePos += take;
             txn->ht_BytesReceived += take;
             ht_hook_body_chunk(txn, out + copied, take);
+            ht_hook_progress(txn, txn->ht_BytesReceived, txn->ht_ContentLength);
             copied += take;
             continue;
         }
@@ -1678,6 +1690,7 @@ ht_http_read_body_gzip(struct AmiHttpBase *base, struct HttpTransaction *txn,
         if (produced > 0) {
             ht_hook_body_chunk(txn, out + copied, produced);
             txn->ht_BytesReceived += produced;
+            ht_hook_progress(txn, txn->ht_BytesReceived, txn->ht_ContentLength);
             copied += produced;
         }
 
@@ -1801,7 +1814,7 @@ ht_http_read_body(struct AmiHttpBase *base, struct HttpTransaction *txn,
             ht_http_body_finish(base, txn);
             return 0;
         }
-        if (!ht_conn_readblock(base, conn, timeout)) {
+        if (!ht_conn_readblock(base, conn, timeout, txn)) {
             if (txn->ht_ContentLength < 0) {
                 ht_http_body_finish(base, txn);
                 return 0;
@@ -1849,6 +1862,7 @@ ht_http_read_body(struct AmiHttpBase *base, struct HttpTransaction *txn,
     conn->hc_IoPos += copy;
     txn->ht_BytesReceived += copy;
     ht_hook_body_chunk(txn, dest, copy);
+    ht_hook_progress(txn, txn->ht_BytesReceived, txn->ht_ContentLength);
 
     if (done_after_send) {
         ht_http_body_finish(base, txn);

@@ -190,6 +190,7 @@ __ASM__ __SAVE_DS__ InitLib(
     }
 
     NewList(&base->ahb_PoolList);
+    NewList(&base->ahb_ActiveList);
     InitSemaphore(&base->ahb_PoolSema);
     InitSemaphore(&base->ahb_SocketSema);
     base->ahb_SslGlobalOpen = FALSE;

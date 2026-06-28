@@ -47,6 +47,7 @@ struct AmiHttpBase
 
     /* Global connection pool */
     struct List             ahb_PoolList;
+    struct List             ahb_ActiveList; /* checked-out connections (in-use) */
     struct SignalSemaphore  ahb_PoolSema;
     struct SignalSemaphore  ahb_SocketSema;
     BOOL                    ahb_SslGlobalOpen;

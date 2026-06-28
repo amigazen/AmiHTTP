@@ -59,6 +59,9 @@ ht_check_break(struct AmiHttpBase *base)
 BOOL
 ht_check_txn_abort(struct HttpTransaction *txn)
 {
+    ULONG total;
+    ULONG elapsed;
+
     if (txn != NULL && (txn->ht_Flags & HTF_ABORTED)) {
         return TRUE;
     }
@@ -67,6 +70,16 @@ ht_check_txn_abort(struct HttpTransaction *txn)
             txn->ht_Flags |= HTF_ABORTED;
         }
         return TRUE;
+    }
+    if (txn != NULL && txn->ht_Session != NULL && txn->ht_TvPerformSet) {
+        total = txn->ht_Session->hs_TotalTimeout;
+        if (total > 0UL) {
+            elapsed = ht_timing_elapsed_ms(txn) / 1000UL;
+            if (elapsed >= total) {
+                txn->ht_Flags |= HTF_ABORTED;
+                return TRUE;
+            }
+        }
     }
     return FALSE;
 }
@@ -123,6 +136,39 @@ ht_hook_error(struct HttpTransaction *txn, LONG code)
     msg.her_Transaction = txn;
     msg.her_Code = code;
     ht_hook_call(txn, HTHK_ERROR, (APTR)txn, (APTR)&msg);
+}
+
+VOID
+ht_hook_progress(struct HttpTransaction *txn, ULONG bytes_received,
+    LONG content_length)
+{
+    struct HttpHookProgress msg;
+
+    if (txn == NULL) {
+        return;
+    }
+    msg.hpp_Transaction = txn;
+    msg.hpp_BytesReceived = bytes_received;
+    msg.hpp_ContentLength = content_length;
+    ht_hook_call(txn, HTHK_PROGRESS, (APTR)txn, (APTR)&msg);
+}
+
+BOOL
+ht_hook_redirect(struct HttpTransaction *txn, LONG status_code,
+    STRPTR from_url, STRPTR to_url)
+{
+    struct HttpHookRedirect msg;
+
+    if (txn == NULL) {
+        return TRUE;
+    }
+    msg.hrh_Transaction = txn;
+    msg.hrh_StatusCode = status_code;
+    msg.hrh_FromUrl = from_url;
+    msg.hrh_ToUrl = to_url;
+    msg.hrh_Follow = TRUE;
+    ht_hook_call(txn, HTHK_REDIRECT, (APTR)txn, (APTR)&msg);
+    return msg.hrh_Follow;
 }
 
 BOOL

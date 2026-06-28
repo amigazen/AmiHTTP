@@ -120,3 +120,47 @@ ht_timing_body_done(struct HttpTransaction *txn)
     }
     txn->ht_Timing.ht_TotalMs = ht_timer_delta_ms(&txn->ht_TvPerform, &tv);
 }
+
+ULONG
+ht_timing_elapsed_ms(struct HttpTransaction *txn)
+{
+    struct timeval tv;
+
+    if (txn == NULL || !txn->ht_TvPerformSet) {
+        return 0UL;
+    }
+    if (!ht_timer_get_time(&tv)) {
+        return 0UL;
+    }
+    return ht_timer_delta_ms(&txn->ht_TvPerform, &tv);
+}
+
+/*
+ * Effective per-operation wait budget: min(per_op_secs, total timeout remaining).
+ * Returns 0 when no per-op limit (legacy blocking recv) unless total timeout
+ * has expired (handled by ht_check_txn_abort before I/O).
+ */
+ULONG
+ht_timeout_resolve(struct HttpTransaction *txn, ULONG per_op_secs)
+{
+    ULONG total;
+    ULONG elapsed;
+    ULONG remain;
+
+    if (txn == NULL || txn->ht_Session == NULL) {
+        return per_op_secs;
+    }
+    total = txn->ht_Session->hs_TotalTimeout;
+    if (total == 0UL || !txn->ht_TvPerformSet) {
+        return per_op_secs;
+    }
+    elapsed = ht_timing_elapsed_ms(txn) / 1000UL;
+    if (elapsed >= total) {
+        return 0UL;
+    }
+    remain = total - elapsed;
+    if (per_op_secs == 0UL || remain < per_op_secs) {
+        return remain;
+    }
+    return per_op_secs;
+}

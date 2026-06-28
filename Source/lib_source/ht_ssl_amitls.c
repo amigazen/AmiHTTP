@@ -7,7 +7,31 @@
  * ERROR_TLS_WANT_READ/WRITE mean WaitSelect on the raw TCP fd and retry (only
  * when ATTA_NON_BLOCKING is set on the connection).
  * Handshake completes on the first successful TlsWrite (deferred attach model).
- * amihttp leaves the socket blocking so BearSSL can wait inside TlsWrite.
+ * amihttp leaves the TCP socket blocking so BearSSL can wait inside TlsWrite.
+ *
+ * --- DO NOT CHANGE (verified AGet + ATlsTest live HTTPS, Jun 2026) ---
+ *
+ * Deferred handshake: TlsAttachSocket only installs BearSSL on the blocking fd;
+ * the TLS handshake runs inside the first ht_ssl_send()/TlsWrite(), same as
+ * ATlsTest at_https_exchange(). Do NOT call TlsHandshake() at attach time.
+ *
+ * Blocking socket at attach: do NOT FIONBIO the fd or pass ATTA_NON_BLOCKING /
+ * ATTA_EXTERNAL_WAIT on attach. Non-blocking + external-wait regressed AGet
+ * (8704) and can wedge BearSSL in RECVREC while only WANT_WRITE is surfaced.
+ *
+ * Per-connection TlsContext: load trust with ATSA_CA_BUNDLE_PATH only on a
+ * connection-local context (ht_ssl_create). Do NOT reuse one session-wide
+ * TlsContext with ATSA_SSL_VERIFY baked in — that path regressed verify/8704.
+ * Apply verify mode at attach via ATTA_SSL_VERIFY only.
+ *
+ * ht_ssl_wait_socket: must use blocking WaitSelect (tv_sec = timeout), bound
+ * through ht_io_obtain(), not zero-timeout poll loops (ht_wait_socket_io).
+ *
+ * ht_ssl_send: must TlsTaskAttach() this task's bsdsocket before TlsWrite();
+ * without it amitls returns ERROR_TLS_IO -> ERROR_HTTP_SSL_HANDSHAKE (8704).
+ *
+ * Do NOT mark hs_HandshakeOk or capture peer cert at TlsAttachSocket; cert
+ * data is available only after the deferred handshake completes on TlsWrite.
  */
 
 #define __USE_SYSBASE
@@ -174,6 +198,9 @@ ht_ssl_wait_socket(struct AmiHttpBase *base, LONG sock, BOOL want_write,
      * subprocesses share amihttp's global SocketBase; calling WaitSelect on
      * another task's handle corrupts the TCP stack (hard lockup).  Hold
      * ahb_SocketSema only for the select, not across TlsRead/TlsWrite.
+     *
+     * Must stay a blocking select (tv_sec > 0).  Zero-timeout polling here
+     * regressed HTTPS handshake completion (AGet 8704).
      */
     rc = ht_io_obtain(base);
     if (rc != 0) {
@@ -476,6 +503,11 @@ ht_ssl_create(STRPTR hostname, STRPTR ca_bundle_path)
     struct HtSsl *s;
     struct TagItem tags[2];
 
+    /*
+     * One TlsContext per connection.  Set ATSA_CA_BUNDLE_PATH here only;
+     * do not add ATSA_SSL_VERIFY on the context (use ATTA_SSL_VERIFY at
+     * attach).  Do not share a session-level TlsContext across connections.
+     */
     if (HttpBase != NULL) {
         ht_sync_proto_bases(HttpBase);
         ht_ssl_sync_base_tags(HttpBase);
@@ -595,7 +627,7 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
         }
         return ht_ssl_map_tls_error(rc);
     }
-    /* Handshake completes on first TlsWrite, not TlsAttachSocket. */
+    /* Handshake completes on first TlsWrite (see file header).  No TlsHandshake. */
     return 0;
 }
 
@@ -625,6 +657,10 @@ ht_ssl_send(struct HtSsl *s, APTR data, ULONG len)
         sockbase = ht_task_current_socket_base(base);
         if (sockbase != NULL) {
             errp = ht_task_errno_ptr(base);
+            /*
+             * Required before every TlsWrite/TlsRead LVO.  Skipping this when
+             * sockbase is NULL yields ERROR_TLS_IO -> 8704 on first request send.
+             */
             rc = TlsTaskAttach(sockbase, errp);
             if (rc != 0) {
                 s->hs_LastTlsError = rc;
@@ -640,6 +676,10 @@ ht_ssl_send(struct HtSsl *s, APTR data, ULONG len)
         }
         n = TlsWrite(s->hs_TlsConn, data, len);
         if (ht_ssl_tls_ok(n)) {
+            /*
+             * Deferred handshake success: first successful TlsWrite completes
+             * BearSSL client handshake and may run cert verify.
+             */
             if (!s->hs_HandshakeOk) {
                 s->hs_HandshakeOk = TRUE;
                 ht_ssl_capture_peer_cert(s);
