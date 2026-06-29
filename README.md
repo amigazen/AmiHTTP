@@ -35,7 +35,7 @@ contexts, connection pools, and wire buffers are never exposed.
 Bootstrap is deliberately minimal: `OpenLibrary("amihttp.library", 0L)`
 is sufficient.  `bsdsocket.library` opens on first HTTP use;
 `amisslmaster.library` and per-task AmiSSL initialisation run on first HTTPS
-use.  No separate init or shutdown LVO is required.
+use.  No separate init or shutdown library call is required.
 
 ## Why a separate HTTP stack?
 
@@ -47,9 +47,8 @@ application.
 Classic Amiga never had an equivalent.  Each program that talked to the web
 tended to:
 
-- Use **bsdsocket** and **AmiSSL** directly (duplicating effort and bugs), amd
-- embed HTTP inside a **monolithic browser** (AWeb, IBrowse, Voyager), making
-  reuse by other tools awkward or impossible.
+- Use **bsdsocket** and **AmiSSL** directly (duplicating effort and increasing risk of defects), and also;
+- embed HTTP inside a **monolithic browser** (AWeb, IBrowse, Voyager), making reuse by other tools awkward or impossible.
 
 amihttp.library exists to close that gap **in the Amiga way**: a shared library
 
@@ -199,7 +198,7 @@ Building AmiHTTP requires:
 - ZLib z.library with header files in include: path
 
 
-Two TLS backends are supported via alternate smakefiles:
+Two differing TLS backends are supported via alternate smakefiles:
 
 - **AmiSSL** (default, wraps OpenSSL) — `smakefile`
 - **AmiTLS** (alternative, wraps BearSSL) — `smakefile.amitls`
