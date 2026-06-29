@@ -2,23 +2,44 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright 2026 amigazen project
  *
- * AGet.c - wget-style HTTP/HTTPS client for AmigaOS (amihttp.library).
+ * AGet.c - wget-style HTTP/HTTPS client for Amiga (amihttp.library).
  *
- * ReadArgs template (must match ag_usage_msg):
+ * ReadArgs template (must match AGET_TEMPLATE and ag_usage_msg):
  *   URL,TO/K,USERAGENT/K,HEAD/S,NOREDIR/S,ASYNC/S,VERBOSE/S,QUIET/S,
  *   TEST/S,COOKIEFILE/K,HEADERS/S,HEADER/K/M,CAFILE/K,INSECURE/S
  *
- * Output routing (AmigaDOS):
+ * Output routing:
  *   - Response body  -> stdout, or TO/K file when given
  *   - Status/errors  -> stderr (ErrorOutput), never mixed into body stream
  *
- * Modes (QUIET and VERBOSE are mutually exclusive; TEST implies VERBOSE):
- *   Default  - one-line HTTP status on stderr; TLS cert summary for https;
- *              body to stdout or TO/K
- *   QUIET/S  - body (or TO file) only; stderr used for errors only
- *   HEADERS/S- request/response header dump on stderr (no API trace)
- *   VERBOSE/S- step-by-step amihttp API trace on stderr
- *   TEST/S   - offline amihttp API self-test (no network); URL/K ignored
+ * Required (fetch mode):
+ *   URL              URL to fetch (http:// or https://; bare host gets http://)
+ *
+ * Output destination:
+ *   TO/K             write decoded body to this file (default: stdout)
+ *
+ * Request options:
+ *   USERAGENT/K      User-Agent request header (default: AGet/1.0 (amihttp))
+ *   HEADER/K/M       extra request header(s); repeatable "Name: value" form
+ *   HEAD/S           send HEAD (response headers only; body not read)
+ *   NOREDIR/S        do not follow 3xx Location redirects
+ *   COOKIEFILE/K     load cookies before request; save jar after success
+ *
+ * TLS (https):
+ *   (default)        VERIFY_PEER using cacert.pem beside AGet (GetProgramDir)
+ *   CAFILE/K         PEM CA bundle path or filename (overrides default)
+ *   INSECURE/S       skip TLS certificate verification (HTSSL_VERIFY_NONE)
+ *
+ * Behaviour:
+ *   ASYNC/S          HttpTransactionPerformAsync + WaitHttpTransaction
+ *
+ * Output modes (QUIET and VERBOSE are mutually exclusive; TEST implies VERBOSE):
+ *   (default)        stderr: one-line HTTP status + TLS cert summary (https)
+ *                    stdout: response body (or TO/K file)
+ *   QUIET/S          stderr: errors only; stdout/file: body only
+ *   HEADERS/S        stderr: request/response header dump (no API trace)
+ *   VERBOSE/S        stderr: step-by-step amihttp API trace
+ *   TEST/S           offline amihttp API self-test (no network); URL ignored
  */
 
 #define __USE_SYSBASE
@@ -435,7 +456,7 @@ ag_tls_configure(struct AGetArgs *args, char *ca_buf, ULONG ca_buflen,
     if (!ag_path_exists((STRPTR)ca_buf)) {
         ag_printf("AGet: CA bundle not found: \"%s\"\n", ca_buf);
         ag_printf("AGet: copy cacert.pem beside AGet, or use CAFILE=<path>, "
-            "or INSECURE/S\n");
+            "or INSECURE/S to ignore certificate verification\n");
         ag_flush_msg();
         return ERROR_HTTP_SSL_VERIFY;
     }
@@ -1971,7 +1992,7 @@ ag_usage(void)
         "  TO/K             write decoded body to this file (default: stdout)\n"
         "\n"
         "Request options:\n"
-        "  USERAGENT/K      User-Agent request header (default: AGet/1.0)\n"
+        "  USERAGENT/K      User-Agent request header (default: AGet/1.0 (amihttp))\n"
         "  HEADER/K/M       extra header(s); repeatable \"Name: value\" form\n"
         "  HEAD/S           send HEAD (headers only, no body read)\n"
         "  NOREDIR/S        do not follow 3xx Location redirects\n"
