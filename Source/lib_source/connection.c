@@ -15,7 +15,7 @@
 #include <proto/utility.h>
 
 #include <libraries/amihttp.h>
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 
 #include "compiler.h"
 #include "amihttp_funcs.h"

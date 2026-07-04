@@ -8,7 +8,7 @@
 
 #include <proto/exec.h>
 
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #include "private/ht_internal.h"
 #include "private/ht_ssl_config.h"
 
@@ -17,7 +17,7 @@ extern struct DosLibrary *DOSBase;
 struct Library *UtilityBase;
 struct Library *ZBase;
 struct Library *SocketBase;
-/* SAS/C #pragma libcall TlsBase in atls_protos.h; synced from ahb_AmiTlsBase. */
+/* SAS/C #pragma libcall TlsBase in amitls_protos.h; synced from ahb_AmiTlsBase. */
 struct Library *TlsBase;
 #ifdef AMIHTTP_USE_AMITLS
 #else

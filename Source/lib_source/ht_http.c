@@ -20,7 +20,7 @@
 
 #include <libraries/z.h>
 
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #include <libraries/amihttp.h>
 
 #include "private/ht_internal.h"

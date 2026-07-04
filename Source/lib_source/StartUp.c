@@ -20,7 +20,7 @@
 #include <proto/alib.h>
 #include <proto/dos.h>
 
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #include "private/ht_build.h"
 #include "private/ht_debug.h"
 #include "compiler.h"

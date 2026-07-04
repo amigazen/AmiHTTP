@@ -54,10 +54,10 @@ extern struct Library *TlsBase;
 #include <sys/socket.h>
 
 #include <libraries/amitls.h>
-#include <proto/atls.h>
+#include <proto/amitls.h>
 #include <proto/bsdsocket.h>
 
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #include <libraries/amihttp.h>
 
 #include "private/ht_debug.h"

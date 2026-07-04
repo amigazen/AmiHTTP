@@ -14,7 +14,7 @@
 #include <proto/dos.h>
 #include <proto/utility.h>
 
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #include <libraries/amihttp.h>
 
 #include "private/ht_debug.h"

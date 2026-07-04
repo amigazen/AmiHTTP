@@ -51,7 +51,7 @@ extern int h_errno;
 #include <libraries/bsdsocket.h>
 #include <proto/bsdsocket.h>
 
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #include <libraries/amihttp.h>
 
 #include "private/ht_debug.h"

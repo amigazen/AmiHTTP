@@ -15,7 +15,7 @@
 
 #include <libraries/z.h>
 #include <libraries/amihttp.h>
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 
 #include "private/ht_internal.h"
 #include "private/ht_zlib.h"

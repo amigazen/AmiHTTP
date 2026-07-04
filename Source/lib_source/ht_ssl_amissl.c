@@ -38,7 +38,7 @@ extern struct Library *SocketBase;
 #include <openssl/bio.h>
 #include <openssl/bn.h>
 
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #include <libraries/amihttp.h>
 #include <proto/bsdsocket.h>
 #include <proto/utility.h>

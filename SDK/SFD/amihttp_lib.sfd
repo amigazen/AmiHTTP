@@ -5,7 +5,6 @@
 ==libname amihttp.library
 ==include <exec/types.h>
 ==include <libraries/amihttp.h>
-==include <amihttp/amihttpbase.h>
 ==bias 30
 ==public
 ==version 1

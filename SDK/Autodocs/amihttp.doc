@@ -66,6 +66,7 @@ amihttp.library/HttpUrlEncode
 amihttp.library/HttpBuildQueryString
 amihttp.library/LoadHttpCookieJar
 amihttp.library/NewHttpCookieJar
+amihttp.library/NewHttpCookieJarTags
 amihttp.library/NewHttpSession
 amihttp.library/NewHttpTransaction
 amihttp.library/OpenHttpConnection
