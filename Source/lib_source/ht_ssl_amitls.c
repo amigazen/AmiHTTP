@@ -239,7 +239,7 @@ ht_ssl_apply_base_tags(struct AmiHttpBase *base)
         base->ahb_CaBundlePath : (STRPTR)"");
     n++;
     tags[n].ti_Tag = TAG_END;
-    TlsBaseTagList(tags);
+    TlsBaseTagsA(tags);
 }
 
 VOID
@@ -521,7 +521,7 @@ ht_ssl_create(STRPTR hostname, STRPTR ca_bundle_path)
     s->hs_LastTlsError = 0;
     s->hs_Hostname = ht_strdup(hostname);
     if (ca_bundle_path != NULL && ca_bundle_path[0] != '\0') {
-        s->hs_TlsCtx = NewTlsContext(NULL);
+        s->hs_TlsCtx = NewTlsContextA(NULL);
         if (s->hs_TlsCtx == NULL) {
             if (s->hs_Hostname) {
                 ht_free(s->hs_Hostname);
@@ -610,7 +610,7 @@ ht_ssl_attach_socket(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
     tags[0].ti_Tag = ATTA_SSL_VERIFY;
     tags[0].ti_Data = (ULONG)ht_ssl_map_verify(verify_mode);
     tags[1].ti_Tag = TAG_DONE;
-    rc = TlsAttachSocket(s->hs_TlsConn, sock, s->hs_Hostname, tags);
+    rc = TlsAttachSocketA(s->hs_TlsConn, sock, s->hs_Hostname, tags);
     if (rc != 0) {
         vr = TlsGetLastError(s->hs_TlsConn);
         if (vr == 0) {
