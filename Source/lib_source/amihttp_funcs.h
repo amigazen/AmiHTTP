@@ -14,7 +14,7 @@
 
 struct AmiHttpBase;
 
-LONG __ASM__ __SAVE_DS__ HttpBaseTagList(__REG__(a0, struct TagItem *tags),
+LONG __ASM__ __SAVE_DS__ HttpBaseTagsA(__REG__(a0, struct TagItem *tags),
     __REG__(a6, struct AmiHttpBase *libbase));
 LONG __ASM__ __SAVE_DS__ HttpError(__REG__(a6, struct AmiHttpBase *libbase));
 STRPTR __ASM__ __SAVE_DS__ HttpGetErrorString(__REG__(d0, LONG code));
@@ -56,7 +56,7 @@ LONG __ASM__ __SAVE_DS__ HttpTransactionGetCipher(__REG__(a0, struct HttpTransac
 LONG __ASM__ __SAVE_DS__ HttpTransactionGetLastError(__REG__(a0, struct HttpTransaction *txn));
 LONG __ASM__ __SAVE_DS__ SetHttpTransactionHook(__REG__(a0, struct HttpTransaction *txn), __REG__(d0, ULONG type), __REG__(a1, struct Hook *hook));
 
-struct HttpConnection *__ASM__ __SAVE_DS__ OpenHttpConnection(__REG__(a0, struct HttpSession *session), __REG__(a1, STRPTR host), __REG__(d0, ULONG port), __REG__(d1, BOOL ssl));
+struct HttpConnection *__ASM__ __SAVE_DS__ OpenHttpConnection(__REG__(a0, struct HttpSession *session), __REG__(a1, STRPTR host), __REG__(d0, ULONG port), __REG__(d1, LONG ssl));
 VOID __ASM__ __SAVE_DS__ CloseHttpConnection(__REG__(a0, struct HttpConnection *conn));
 LONG __ASM__ __SAVE_DS__ HttpConnectionWrite(__REG__(a0, struct HttpConnection *conn), __REG__(a1, APTR buffer), __REG__(d0, ULONG len));
 LONG __ASM__ __SAVE_DS__ HttpConnectionRead(__REG__(a0, struct HttpConnection *conn), __REG__(a1, APTR buffer), __REG__(d0, ULONG len));
@@ -80,8 +80,7 @@ STRPTR __ASM__ __SAVE_DS__ HttpUrlDecode(__REG__(a0, STRPTR str));
 STRPTR __ASM__ __SAVE_DS__ HttpPathEncode(__REG__(a0, STRPTR path));
 STRPTR __ASM__ __SAVE_DS__ HttpBuildQueryString(__REG__(a0, struct List *pairs));
 
-struct HttpCookieJar *__ASM__ __SAVE_DS__ NewHttpCookieJar(void);
-struct HttpCookieJar *__ASM__ __SAVE_DS__ NewHttpCookieJarTags(__REG__(a0, struct TagItem *tags));
+struct HttpCookieJar *__ASM__ __SAVE_DS__ NewHttpCookieJarA(__REG__(a0, struct TagItem *tags));
 VOID __ASM__ __SAVE_DS__ DisposeHttpCookieJar(__REG__(a0, struct HttpCookieJar *jar));
 LONG __ASM__ __SAVE_DS__ LoadHttpCookieJar(__REG__(a0, struct HttpCookieJar *jar), __REG__(a1, STRPTR filename));
 LONG __ASM__ __SAVE_DS__ SaveHttpCookieJar(__REG__(a0, struct HttpCookieJar *jar), __REG__(a1, STRPTR filename));

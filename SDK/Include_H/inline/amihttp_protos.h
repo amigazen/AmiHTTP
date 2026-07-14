@@ -16,8 +16,13 @@
 /* Bootstrap: OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket */
 /* opens on first HTTP use; amisslmaster / OpenAmiSSLTags on first HTTPS use */
 
-LONG __HttpBaseTagList(__reg("a6") void *, __reg("a0") struct TagItem *tags)="\tjsr\t-30(a6)";
-#define HttpBaseTagList(tags) __HttpBaseTagList(HttpBase, (tags))
+LONG __HttpBaseTagsA(__reg("a6") void *, __reg("a0") struct TagItem *tags)="\tjsr\t-30(a6)";
+#define HttpBaseTagsA(tags) __HttpBaseTagsA(HttpBase, (tags))
+
+#if !defined(NO_INLINE_STDARG) && (__STDC__ == 1L) && (__STDC_VERSION__ >= 199901L)
+LONG __HttpBaseTags(__reg("a6") void *, ...)="\tmove.l\ta0,-(a7)\n\tlea\t4(a7),a0\n\tjsr\t-30(a6)\n\tmovea.l\t(a7)+,a0";
+#define HttpBaseTags(...) __HttpBaseTags(HttpBase, __VA_ARGS__)
+#endif
 
 LONG __HttpError(__reg("a6") void *)="\tjsr\t-36(a6)";
 #define HttpError() __HttpError(HttpBase)
@@ -36,6 +41,11 @@ void __DisposeHttpSession(__reg("a6") void *, __reg("a0") struct HttpSession *se
 
 LONG __SetHttpSessionAttrsA(__reg("a6") void *, __reg("a0") struct HttpSession *session, __reg("a1") struct TagItem *tags)="\tjsr\t-60(a6)";
 #define SetHttpSessionAttrsA(session, tags) __SetHttpSessionAttrsA(HttpBase, (session), (tags))
+
+#if !defined(NO_INLINE_STDARG) && (__STDC__ == 1L) && (__STDC_VERSION__ >= 199901L)
+LONG __SetHttpSessionAttrs(__reg("a6") void *, __reg("a0") struct HttpSession *session, ...)="\tmove.l\ta1,-(a7)\n\tlea\t4(a7),a1\n\tjsr\t-60(a6)\n\tmovea.l\t(a7)+,a1";
+#define SetHttpSessionAttrs(...) __SetHttpSessionAttrs(HttpBase, __VA_ARGS__)
+#endif
 
 LONG __HttpSessionAttachCookieJar(__reg("a6") void *, __reg("a0") struct HttpSession *session, __reg("a1") struct HttpCookieJar *jar)="\tjsr\t-66(a6)";
 #define HttpSessionAttachCookieJar(session, jar) __HttpSessionAttachCookieJar(HttpBase, (session), (jar))
@@ -57,6 +67,11 @@ void __DisposeHttpTransaction(__reg("a6") void *, __reg("a0") struct HttpTransac
 
 LONG __SetHttpTransactionAttrsA(__reg("a6") void *, __reg("a0") struct HttpTransaction *txn, __reg("a1") struct TagItem *tags)="\tjsr\t-96(a6)";
 #define SetHttpTransactionAttrsA(txn, tags) __SetHttpTransactionAttrsA(HttpBase, (txn), (tags))
+
+#if !defined(NO_INLINE_STDARG) && (__STDC__ == 1L) && (__STDC_VERSION__ >= 199901L)
+LONG __SetHttpTransactionAttrs(__reg("a6") void *, __reg("a0") struct HttpTransaction *txn, ...)="\tmove.l\ta1,-(a7)\n\tlea\t4(a7),a1\n\tjsr\t-96(a6)\n\tmovea.l\t(a7)+,a1";
+#define SetHttpTransactionAttrs(...) __SetHttpTransactionAttrs(HttpBase, __VA_ARGS__)
+#endif
 
 LONG __HttpTransactionAddHeader(__reg("a6") void *, __reg("a0") struct HttpTransaction *txn, __reg("a1") STRPTR name, __reg("a2") STRPTR value)="\tjsr\t-102(a6)";
 #define HttpTransactionAddHeader(txn, name, value) __HttpTransactionAddHeader(HttpBase, (txn), (name), (value))
@@ -115,7 +130,7 @@ LONG __SetHttpTransactionHook(__reg("a6") void *, __reg("a0") struct HttpTransac
 
 /* Tier 3 - HttpConnection streaming / WebDAV / custom protocols. */
 
-struct HttpConnection *__OpenHttpConnection(__reg("a6") void *, __reg("a0") struct HttpSession *session, __reg("a1") STRPTR host, __reg("d0") ULONG port, __reg("d1") BOOL ssl)="\tjsr\t-210(a6)";
+struct HttpConnection *__OpenHttpConnection(__reg("a6") void *, __reg("a0") struct HttpSession *session, __reg("a1") STRPTR host, __reg("d0") ULONG port, __reg("d1") LONG ssl)="\tjsr\t-210(a6)";
 #define OpenHttpConnection(session, host, port, ssl) __OpenHttpConnection(HttpBase, (session), (host), (port), (ssl))
 
 void __CloseHttpConnection(__reg("a6") void *, __reg("a0") struct HttpConnection *conn)="\tjsr\t-216(a6)";
@@ -186,9 +201,16 @@ STRPTR __HttpBuildQueryString(__reg("a6") void *, __reg("a0") struct List *pairs
 
 
 /* Optional HttpCookieJar (attach via HttpSessionAttachCookieJar). */
+/* Pass NULL tags / TAG_DONE for a default jar (no separate zero-arg LVO — */
+/* that would collide with the ==varargs NewHttpCookieJar name). */
 
-struct HttpCookieJar *__NewHttpCookieJar(__reg("a6") void *)="\tjsr\t-342(a6)";
-#define NewHttpCookieJar() __NewHttpCookieJar(HttpBase)
+struct HttpCookieJar *__NewHttpCookieJarA(__reg("a6") void *, __reg("a0") struct TagItem *tags)="\tjsr\t-342(a6)";
+#define NewHttpCookieJarA(tags) __NewHttpCookieJarA(HttpBase, (tags))
+
+#if !defined(NO_INLINE_STDARG) && (__STDC__ == 1L) && (__STDC_VERSION__ >= 199901L)
+struct HttpCookieJar *__NewHttpCookieJar(__reg("a6") void *, ...)="\tmove.l\ta0,-(a7)\n\tlea\t4(a7),a0\n\tjsr\t-342(a6)\n\tmovea.l\t(a7)+,a0";
+#define NewHttpCookieJar(...) __NewHttpCookieJar(HttpBase, __VA_ARGS__)
+#endif
 
 void __DisposeHttpCookieJar(__reg("a6") void *, __reg("a0") struct HttpCookieJar *jar)="\tjsr\t-348(a6)";
 #define DisposeHttpCookieJar(jar) __DisposeHttpCookieJar(HttpBase, (jar))
@@ -256,10 +278,7 @@ STRPTR __HttpTransactionRespHeaderNext(__reg("a6") void *, __reg("a0") struct Ht
 BOOL __HttpTransactionRespHeaderByIndex(__reg("a6") void *, __reg("a0") struct HttpTransaction *txn, __reg("d0") ULONG index, __reg("a1") STRPTR *name_out, __reg("a2") STRPTR *value_out)="\tjsr\t-462(a6)";
 #define HttpTransactionRespHeaderByIndex(txn, index, name_out, value_out) __HttpTransactionRespHeaderByIndex(HttpBase, (txn), (index), (name_out), (value_out))
 
-struct HttpCookieJar *__NewHttpCookieJarTags(__reg("a6") void *, __reg("a0") struct TagItem *tags)="\tjsr\t-468(a6)";
-#define NewHttpCookieJarTags(tags) __NewHttpCookieJarTags(HttpBase, (tags))
-
-LONG __HttpTransactionGetCipher(__reg("a6") void *, __reg("a0") struct HttpTransaction *txn, __reg("a1") STRPTR buf, __reg("d0") ULONG buflen)="\tjsr\t-474(a6)";
+LONG __HttpTransactionGetCipher(__reg("a6") void *, __reg("a0") struct HttpTransaction *txn, __reg("a1") STRPTR buf, __reg("d0") ULONG buflen)="\tjsr\t-468(a6)";
 #define HttpTransactionGetCipher(txn, buf, buflen) __HttpTransactionGetCipher(HttpBase, (txn), (buf), (buflen))
 
 

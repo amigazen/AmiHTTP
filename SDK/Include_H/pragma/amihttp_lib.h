@@ -20,7 +20,10 @@
 /* Bootstrap: OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket */
 /* opens on first HTTP use; amisslmaster / OpenAmiSSLTags on first HTTPS use */
 
-#pragma amicall(HttpBase, 0x1E, HttpBaseTagList(a0))
+#pragma amicall(HttpBase, 0x1E, HttpBaseTagsA(a0))
+#if defined(__STORM__)
+#pragma tagcall(HttpBase, 0x1E, HttpBaseTags(a0))
+#endif /* __STORM__ */
 #pragma amicall(HttpBase, 0x24, HttpError())
 #pragma amicall(HttpBase, 0x2A, HttpGetErrorString(d0))
 
@@ -29,6 +32,9 @@
 #pragma amicall(HttpBase, 0x30, NewHttpSession())
 #pragma amicall(HttpBase, 0x36, DisposeHttpSession(a0))
 #pragma amicall(HttpBase, 0x3C, SetHttpSessionAttrsA(a0,a1))
+#if defined(__STORM__)
+#pragma tagcall(HttpBase, 0x3C, SetHttpSessionAttrs(a0,a1))
+#endif /* __STORM__ */
 #pragma amicall(HttpBase, 0x42, HttpSessionAttachCookieJar(a0,a1))
 #pragma amicall(HttpBase, 0x48, HttpSessionDetachCookieJar(a0))
 #pragma amicall(HttpBase, 0x4E, SetHttpSessionHook(a0,d0,a1))
@@ -38,6 +44,9 @@
 #pragma amicall(HttpBase, 0x54, NewHttpTransaction(a0))
 #pragma amicall(HttpBase, 0x5A, DisposeHttpTransaction(a0))
 #pragma amicall(HttpBase, 0x60, SetHttpTransactionAttrsA(a0,a1))
+#if defined(__STORM__)
+#pragma tagcall(HttpBase, 0x60, SetHttpTransactionAttrs(a0,a1))
+#endif /* __STORM__ */
 #pragma amicall(HttpBase, 0x66, HttpTransactionAddHeader(a0,a1,a2))
 #pragma amicall(HttpBase, 0x6C, HttpTransactionClearHeaders(a0))
 #pragma amicall(HttpBase, 0x72, HttpTransactionPerform(a0))
@@ -86,8 +95,13 @@
 #pragma amicall(HttpBase, 0x150, HttpBuildQueryString(a0))
 
 /* Optional HttpCookieJar (attach via HttpSessionAttachCookieJar). */
+/* Pass NULL tags / TAG_DONE for a default jar (no separate zero-arg LVO — */
+/* that would collide with the ==varargs NewHttpCookieJar name). */
 
-#pragma amicall(HttpBase, 0x156, NewHttpCookieJar())
+#pragma amicall(HttpBase, 0x156, NewHttpCookieJarA(a0))
+#if defined(__STORM__)
+#pragma tagcall(HttpBase, 0x156, NewHttpCookieJar(a0))
+#endif /* __STORM__ */
 #pragma amicall(HttpBase, 0x15C, DisposeHttpCookieJar(a0))
 #pragma amicall(HttpBase, 0x162, LoadHttpCookieJar(a0,a1))
 #pragma amicall(HttpBase, 0x168, SaveHttpCookieJar(a0,a1))
@@ -114,7 +128,6 @@
 #pragma amicall(HttpBase, 0x1C2, HttpPeerCertFree(a0))
 #pragma amicall(HttpBase, 0x1C8, HttpTransactionRespHeaderNext(a0,a1,a2))
 #pragma amicall(HttpBase, 0x1CE, HttpTransactionRespHeaderByIndex(a0,d0,a1,a2))
-#pragma amicall(HttpBase, 0x1D4, NewHttpCookieJarTags(a0))
-#pragma amicall(HttpBase, 0x1DA, HttpTransactionGetCipher(a0,a1,d0))
+#pragma amicall(HttpBase, 0x1D4, HttpTransactionGetCipher(a0,a1,d0))
 
 #endif /* PRAGMA_AMIHTTP_LIB_H */

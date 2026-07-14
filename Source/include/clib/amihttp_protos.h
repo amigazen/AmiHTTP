@@ -27,7 +27,8 @@ extern "C" {
 /* Bootstrap: OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket*/
 /* opens on first HTTP use; amisslmaster / OpenAmiSSLTags on first HTTPS use*/
 
-LONG HttpBaseTagList(struct TagItem *tags);
+LONG HttpBaseTagsA(struct TagItem *tags);
+LONG HttpBaseTags(Tag firstTag, ...);
 LONG HttpError(void);
 STRPTR HttpGetErrorString(LONG code);
 
@@ -36,6 +37,7 @@ STRPTR HttpGetErrorString(LONG code);
 struct HttpSession *NewHttpSession(void);
 void DisposeHttpSession(struct HttpSession *session);
 LONG SetHttpSessionAttrsA(struct HttpSession *session, struct TagItem *tags);
+LONG SetHttpSessionAttrs(struct HttpSession *session, ...);
 LONG HttpSessionAttachCookieJar(struct HttpSession *session, struct HttpCookieJar *jar);
 void HttpSessionDetachCookieJar(struct HttpSession *session);
 LONG SetHttpSessionHook(struct HttpSession *session, ULONG type, struct Hook *hook);
@@ -45,6 +47,7 @@ LONG SetHttpSessionHook(struct HttpSession *session, ULONG type, struct Hook *ho
 struct HttpTransaction *NewHttpTransaction(struct HttpSession *session);
 void DisposeHttpTransaction(struct HttpTransaction *txn);
 LONG SetHttpTransactionAttrsA(struct HttpTransaction *txn, struct TagItem *tags);
+LONG SetHttpTransactionAttrs(struct HttpTransaction *txn, ...);
 LONG HttpTransactionAddHeader(struct HttpTransaction *txn, STRPTR name, STRPTR value);
 void HttpTransactionClearHeaders(struct HttpTransaction *txn);
 LONG HttpTransactionPerform(struct HttpTransaction *txn);
@@ -66,7 +69,7 @@ LONG SetHttpTransactionHook(struct HttpTransaction *txn, ULONG type, struct Hook
 
 /* Tier 3 - HttpConnection streaming / WebDAV / custom protocols.*/
 
-struct HttpConnection *OpenHttpConnection(struct HttpSession *session, STRPTR host, ULONG port, BOOL ssl);
+struct HttpConnection *OpenHttpConnection(struct HttpSession *session, STRPTR host, ULONG port, LONG ssl);
 void CloseHttpConnection(struct HttpConnection *conn);
 LONG HttpConnectionWrite(struct HttpConnection *conn, APTR buffer, ULONG len);
 LONG HttpConnectionRead(struct HttpConnection *conn, APTR buffer, ULONG len);
@@ -94,7 +97,8 @@ STRPTR HttpBuildQueryString(struct List *pairs);
 
 /* Optional HttpCookieJar (attach via HttpSessionAttachCookieJar).*/
 
-struct HttpCookieJar *NewHttpCookieJar(void);
+struct HttpCookieJar *NewHttpCookieJarA(struct TagItem *tags);
+struct HttpCookieJar *NewHttpCookieJar(Tag firstTag, ...);
 void DisposeHttpCookieJar(struct HttpCookieJar *jar);
 LONG LoadHttpCookieJar(struct HttpCookieJar *jar, STRPTR filename);
 LONG SaveHttpCookieJar(struct HttpCookieJar *jar, STRPTR filename);
@@ -121,7 +125,6 @@ LONG HttpTransactionGetPeerCert(struct HttpTransaction *txn, struct HttpSslPeerC
 void HttpPeerCertFree(struct HttpSslPeerCert *cert);
 STRPTR HttpTransactionRespHeaderNext(struct HttpTransaction *txn, STRPTR header_name, STRPTR prev_value);
 BOOL HttpTransactionRespHeaderByIndex(struct HttpTransaction *txn, ULONG index, STRPTR *name_out, STRPTR *value_out);
-struct HttpCookieJar *NewHttpCookieJarTags(struct TagItem *tags);
 LONG HttpTransactionGetCipher(struct HttpTransaction *txn, STRPTR buf, ULONG buflen);
 
 #ifdef __cplusplus

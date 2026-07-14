@@ -14,7 +14,7 @@
 ** Tier 0 - Per-process configuration (after OpenLibrary only).
 ** Bootstrap: OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket
 ** opens on first HTTP use; amisslmaster / OpenAmiSSLTags on first HTTPS use
-_LVOHttpBaseTagList equ -30
+_LVOHttpBaseTagsA equ -30
 _LVOHttpError equ -36
 _LVOHttpGetErrorString equ -42
 ** Tier 1 - HttpSession persistent client context.
@@ -71,7 +71,9 @@ _LVOHttpUrlDecode equ -324
 _LVOHttpPathEncode equ -330
 _LVOHttpBuildQueryString equ -336
 ** Optional HttpCookieJar (attach via HttpSessionAttachCookieJar).
-_LVONewHttpCookieJar equ -342
+** Pass NULL tags / TAG_DONE for a default jar (no separate zero-arg LVO —
+** that would collide with the ==varargs NewHttpCookieJar name).
+_LVONewHttpCookieJarA equ -342
 _LVODisposeHttpCookieJar equ -348
 _LVOLoadHttpCookieJar equ -354
 _LVOSaveHttpCookieJar equ -360
@@ -94,6 +96,5 @@ _LVOHttpTransactionGetPeerCert equ -444
 _LVOHttpPeerCertFree equ -450
 _LVOHttpTransactionRespHeaderNext equ -456
 _LVOHttpTransactionRespHeaderByIndex equ -462
-_LVONewHttpCookieJarTags equ -468
-_LVOHttpTransactionGetCipher equ -474
+_LVOHttpTransactionGetCipher equ -468
 

@@ -15,7 +15,7 @@
 #include <libraries/amihttp.h>
 #endif
 #ifndef AMIHTTP_AMIHTTPBASE_H
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #endif
 
 BOOL ht_check_break(struct AmiHttpBase *base);

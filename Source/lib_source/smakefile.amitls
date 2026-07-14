@@ -113,10 +113,12 @@ install:
 
 headers:
 	Copy clone /include/libraries/amihttp.h //SDK/Include_h/libraries/amihttp.h
-	Copy clone /include/amihttp/amihttpbase.h //SDK/Include_h/amihttp/amihttpbase.h
 	Copy clone /include/proto/amihttp.h //SDK/Include_h/proto/amihttp.h
 	Copy clone /include/clib/amihttp_protos.h //SDK/Include_h/clib/amihttp_protos.h
 	Copy clone /include/pragmas/amihttp_pragmas.h //SDK/Include_h/pragmas/amihttp_pragmas.h
+	Copy clone /include/pragma/amihttp_lib.h //SDK/Include_h/pragma/amihttp_lib.h
+	Copy clone /include/inline/amihttp.h //SDK/Include_h/inline/amihttp.h
+	Copy clone /include/inline/amihttp_protos.h //SDK/Include_h/inline/amihttp_protos.h
 
 clean:
 	-$(RM) \#?.o

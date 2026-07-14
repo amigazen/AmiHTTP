@@ -70,7 +70,7 @@ operation names (`HttpTransactionPerform`) to avoid flat-namespace clashes.
 
 | Tier | Objects | Use case |
 |------|---------|----------|
-| 0 | `HttpBase`, `HttpBaseTagList` | Per-process defaults (timeouts, pool limits, break mask, CA bundle) |
+| 0 | `HttpBase`, `HttpBaseTagsA` | Per-process defaults (timeouts, pool limits, break mask, CA bundle) |
 | 1 | `HttpSession`, `HttpCookieJar` | Persistent client settings (User-Agent, proxy, redirects, optional jar) |
 | 2 | `HttpTransaction` | **Primary API** — wget, browser fetch, AJAX, REST, conditional GET |
 | 3 | `HttpConnection` | WebDAV, streaming PUT, incremental wire I/O, custom protocols |

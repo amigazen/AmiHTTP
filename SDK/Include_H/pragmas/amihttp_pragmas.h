@@ -20,7 +20,10 @@
 /* Bootstrap: OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket */
 /* opens on first HTTP use; amisslmaster / OpenAmiSSLTags on first HTTPS use */
 
-#pragma libcall HttpBase HttpBaseTagList 1E 801
+#pragma libcall HttpBase HttpBaseTagsA 1E 801
+#if defined(__SASC_60)
+#pragma tagcall HttpBase HttpBaseTags 1E 801
+#endif /* __SASC_60 */
 #pragma libcall HttpBase HttpError 24 00
 #pragma libcall HttpBase HttpGetErrorString 2A 001
 
@@ -29,6 +32,9 @@
 #pragma libcall HttpBase NewHttpSession 30 00
 #pragma libcall HttpBase DisposeHttpSession 36 801
 #pragma libcall HttpBase SetHttpSessionAttrsA 3C 9802
+#if defined(__SASC_60)
+#pragma tagcall HttpBase SetHttpSessionAttrs 3C 9802
+#endif /* __SASC_60 */
 #pragma libcall HttpBase HttpSessionAttachCookieJar 42 9802
 #pragma libcall HttpBase HttpSessionDetachCookieJar 48 801
 #pragma libcall HttpBase SetHttpSessionHook 4E 90803
@@ -38,6 +44,9 @@
 #pragma libcall HttpBase NewHttpTransaction 54 801
 #pragma libcall HttpBase DisposeHttpTransaction 5A 801
 #pragma libcall HttpBase SetHttpTransactionAttrsA 60 9802
+#if defined(__SASC_60)
+#pragma tagcall HttpBase SetHttpTransactionAttrs 60 9802
+#endif /* __SASC_60 */
 #pragma libcall HttpBase HttpTransactionAddHeader 66 A9803
 #pragma libcall HttpBase HttpTransactionClearHeaders 6C 801
 #pragma libcall HttpBase HttpTransactionPerform 72 801
@@ -86,8 +95,13 @@
 #pragma libcall HttpBase HttpBuildQueryString 150 801
 
 /* Optional HttpCookieJar (attach via HttpSessionAttachCookieJar). */
+/* Pass NULL tags / TAG_DONE for a default jar (no separate zero-arg LVO — */
+/* that would collide with the ==varargs NewHttpCookieJar name). */
 
-#pragma libcall HttpBase NewHttpCookieJar 156 00
+#pragma libcall HttpBase NewHttpCookieJarA 156 801
+#if defined(__SASC_60)
+#pragma tagcall HttpBase NewHttpCookieJar 156 801
+#endif /* __SASC_60 */
 #pragma libcall HttpBase DisposeHttpCookieJar 15C 801
 #pragma libcall HttpBase LoadHttpCookieJar 162 9802
 #pragma libcall HttpBase SaveHttpCookieJar 168 9802
@@ -114,7 +128,6 @@
 #pragma libcall HttpBase HttpPeerCertFree 1C2 801
 #pragma libcall HttpBase HttpTransactionRespHeaderNext 1C8 A9803
 #pragma libcall HttpBase HttpTransactionRespHeaderByIndex 1CE A90804
-#pragma libcall HttpBase NewHttpCookieJarTags 1D4 801
-#pragma libcall HttpBase HttpTransactionGetCipher 1DA 09803
+#pragma libcall HttpBase HttpTransactionGetCipher 1D4 09803
 
 #endif /* PRAGMAS_AMIHTTP_PRAGMAS_H */

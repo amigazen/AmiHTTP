@@ -79,7 +79,7 @@ __ASM__ __SAVE_DS__ OpenHttpConnection(
     __REG__(a0, struct HttpSession *session),
     __REG__(a1, STRPTR host),
     __REG__(d0, ULONG port),
-    __REG__(d1, BOOL ssl))
+    __REG__(d1, LONG ssl))
 {
     struct HtStreamConn *hst;
     struct ParsedUrl pu;

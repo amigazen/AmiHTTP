@@ -68,7 +68,7 @@ APTR FuncTab[] = {
     (APTR)ExpungeLib,
     (APTR)ExtFuncLib,
     /* Tier 0 */
-    (APTR)HttpBaseTagList,
+    (APTR)HttpBaseTagsA,
     (APTR)HttpError,
     (APTR)HttpGetErrorString,
     /* Tier 1 */
@@ -125,7 +125,7 @@ APTR FuncTab[] = {
     (APTR)HttpPathEncode,
     (APTR)HttpBuildQueryString,
     /* Cookie jar */
-    (APTR)NewHttpCookieJar,
+    (APTR)NewHttpCookieJarA,
     (APTR)DisposeHttpCookieJar,
     (APTR)LoadHttpCookieJar,
     (APTR)SaveHttpCookieJar,
@@ -146,7 +146,6 @@ APTR FuncTab[] = {
     (APTR)HttpPeerCertFree,
     (APTR)HttpTransactionRespHeaderNext,
     (APTR)HttpTransactionRespHeaderByIndex,
-    (APTR)NewHttpCookieJarTags,
     (APTR)HttpTransactionGetCipher,
     (APTR)((LONG)-1)
 };

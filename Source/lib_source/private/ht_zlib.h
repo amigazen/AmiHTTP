@@ -4,7 +4,7 @@
  *
  * ht_zlib.h - z.library inflate helpers for Content-Encoding decode
  *
- * Include after <amihttp/amihttpbase.h> and private/ht_internal.h.
+ * Include after private/amihttpbase.h and private/ht_internal.h.
  */
 
 #ifndef AMIHTTP_PRIVATE_HT_ZLIB_H
@@ -15,7 +15,7 @@
 #endif
 
 #ifndef AMIHTTP_AMIHTTPBASE_H
-#include <amihttp/amihttpbase.h>
+#include "private/amihttpbase.h"
 #endif
 
 #ifndef EXEC_TYPES_H

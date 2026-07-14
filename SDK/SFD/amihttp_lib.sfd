@@ -1,4 +1,4 @@
-==id $VER: amihttp_lib.sfd 1.1 (22.6.2026)
+==id $VER: amihttp_lib.sfd 1.3 (14.7.2026)
 *"amihttp.library"
 ==base _HttpBase
 ==basetype struct Library *
@@ -14,7 +14,9 @@
 * Bootstrap: OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket
 * opens on first HTTP use; amisslmaster / OpenAmiSSLTags on first HTTPS use
 *
-LONG HttpBaseTagList(struct TagItem *tags) (a0)
+LONG HttpBaseTagsA(struct TagItem *tags) (a0)
+==varargs
+LONG HttpBaseTags(...) (a0)
 LONG HttpError() ()
 STRPTR HttpGetErrorString(LONG code) (d0)
 *
@@ -23,6 +25,8 @@ STRPTR HttpGetErrorString(LONG code) (d0)
 struct HttpSession *NewHttpSession() ()
 VOID DisposeHttpSession(struct HttpSession *session) (a0)
 LONG SetHttpSessionAttrsA(struct HttpSession *session, struct TagItem *tags) (a0,a1)
+==varargs
+LONG SetHttpSessionAttrs(struct HttpSession *session, ...) (a0,a1)
 LONG HttpSessionAttachCookieJar(struct HttpSession *session, struct HttpCookieJar *jar) (a0,a1)
 VOID HttpSessionDetachCookieJar(struct HttpSession *session) (a0)
 LONG SetHttpSessionHook(struct HttpSession *session, ULONG type, struct Hook *hook) (a0,d0,a1)
@@ -32,6 +36,8 @@ LONG SetHttpSessionHook(struct HttpSession *session, ULONG type, struct Hook *ho
 struct HttpTransaction *NewHttpTransaction(struct HttpSession *session) (a0)
 VOID DisposeHttpTransaction(struct HttpTransaction *txn) (a0)
 LONG SetHttpTransactionAttrsA(struct HttpTransaction *txn, struct TagItem *tags) (a0,a1)
+==varargs
+LONG SetHttpTransactionAttrs(struct HttpTransaction *txn, ...) (a0,a1)
 LONG HttpTransactionAddHeader(struct HttpTransaction *txn, STRPTR name, STRPTR value) (a0,a1,a2)
 VOID HttpTransactionClearHeaders(struct HttpTransaction *txn) (a0)
 LONG HttpTransactionPerform(struct HttpTransaction *txn) (a0)
@@ -53,7 +59,7 @@ LONG SetHttpTransactionHook(struct HttpTransaction *txn, ULONG type, struct Hook
 *
 * Tier 3 - HttpConnection streaming / WebDAV / custom protocols.
 *
-struct HttpConnection *OpenHttpConnection(struct HttpSession *session, STRPTR host, ULONG port, BOOL ssl) (a0,a1,d0,d1)
+struct HttpConnection *OpenHttpConnection(struct HttpSession *session, STRPTR host, ULONG port, LONG ssl) (a0,a1,d0,d1)
 VOID CloseHttpConnection(struct HttpConnection *conn) (a0)
 LONG HttpConnectionWrite(struct HttpConnection *conn, APTR buffer, ULONG len) (a0,a1,d0)
 LONG HttpConnectionRead(struct HttpConnection *conn, APTR buffer, ULONG len) (a0,a1,d0)
@@ -80,8 +86,12 @@ STRPTR HttpPathEncode(STRPTR path) (a0)
 STRPTR HttpBuildQueryString(struct List *pairs) (a0)
 *
 * Optional HttpCookieJar (attach via HttpSessionAttachCookieJar).
+* Pass NULL tags / TAG_DONE for a default jar (no separate zero-arg LVO —
+* that would collide with the ==varargs NewHttpCookieJar name).
 *
-struct HttpCookieJar *NewHttpCookieJar() ()
+struct HttpCookieJar *NewHttpCookieJarA(struct TagItem *tags) (a0)
+==varargs
+struct HttpCookieJar *NewHttpCookieJar(...) (a0)
 VOID DisposeHttpCookieJar(struct HttpCookieJar *jar) (a0)
 LONG LoadHttpCookieJar(struct HttpCookieJar *jar, STRPTR filename) (a0,a1)
 LONG SaveHttpCookieJar(struct HttpCookieJar *jar, STRPTR filename) (a0,a1)
@@ -108,6 +118,5 @@ LONG HttpTransactionGetPeerCert(struct HttpTransaction *txn, struct HttpSslPeerC
 VOID HttpPeerCertFree(struct HttpSslPeerCert *cert) (a0)
 STRPTR HttpTransactionRespHeaderNext(struct HttpTransaction *txn, STRPTR header_name, STRPTR prev_value) (a0,a1,a2)
 BOOL HttpTransactionRespHeaderByIndex(struct HttpTransaction *txn, ULONG index, STRPTR *name_out, STRPTR *value_out) (a0,d0,a1,a2)
-struct HttpCookieJar *NewHttpCookieJarTags(struct TagItem *tags) (a0)
 LONG HttpTransactionGetCipher(struct HttpTransaction *txn, STRPTR buf, ULONG buflen) (a0,a1,d0)
 ==end

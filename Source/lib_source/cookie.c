@@ -40,18 +40,13 @@ ht_cookie_jar_new(void)
 }
 
 struct HttpCookieJar *
-__ASM__ __SAVE_DS__ NewHttpCookieJar(void)
-{
-    return ht_cookie_jar_new();
-}
-
-struct HttpCookieJar *
-__ASM__ __SAVE_DS__ NewHttpCookieJarTags(
+__ASM__ __SAVE_DS__ NewHttpCookieJarA(
     __REG__(a0, struct TagItem *tags))
 {
     struct HttpCookieJar *jar;
     struct TagItem *t;
 
+    /* NULL tags = default jar (replaces the former zero-arg NewHttpCookieJar). */
     jar = ht_cookie_jar_new();
     if (jar == NULL) {
         return NULL;

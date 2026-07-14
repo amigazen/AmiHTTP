@@ -1067,7 +1067,7 @@ ag_test_cookies(struct HttpSession *session, STRPTR url)
     LONG rv;
 
     ag_step_log("Cookie: NewHttpCookieJar");
-    jar = NewHttpCookieJar();
+    jar = NewHttpCookieJar(TAG_DONE);
     ag_log_ptr("NewHttpCookieJar", "jar", jar);
     ag_test_expect_nonnull("NewHttpCookieJar", jar);
     if (jar == NULL) {
@@ -1342,7 +1342,7 @@ ag_setup_cookie_jar(struct HttpSession *session, STRPTR url, STRPTR cookiefile)
     (void)url;
 
     ag_step_log("Cookie: NewHttpCookieJar");
-    jar = NewHttpCookieJar();
+    jar = NewHttpCookieJar(TAG_DONE);
     ag_log_ptr("NewHttpCookieJar", "jar", jar);
     if (jar == NULL) {
         ag_log_errno("after NewHttpCookieJar");
@@ -1403,7 +1403,7 @@ ag_selftest(void)
         HTBT_ERRNOPTR, (ULONG)&ag_errno_slot,
         TAG_DONE);
     if (!rv) {
-        ag_log_fail("HttpBaseTagList", HttpError());
+        ag_log_fail("HttpBaseTagsA", HttpError());
         err = HttpError();
         goto st_cleanup;
     }
@@ -1711,7 +1711,7 @@ ag_download(struct AGetArgs *args)
             TAG_DONE);
     }
     if (!rv) {
-        ag_log_fail("HttpBaseTagList", HttpError());
+        ag_log_fail("HttpBaseTagsA", HttpError());
         err = HttpError();
         goto dl_cleanup;
     }

@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright 2026 amigazen project
  *
- * amihttpbase.h - amihttp.library base structure (library-private fields)
+ * amihttpbase.h - amihttp.library base structure (lib_source/private only)
  */
 
 #ifndef AMIHTTP_AMIHTTPBASE_H
@@ -56,7 +56,7 @@ struct AmiHttpBase
     int                     ahb_SocketErrno;
     BOOL                    ahb_SocketConfigured;
 
-    /* Per-process defaults (HttpBaseTagList) */
+    /* Per-process defaults (HttpBaseTagsA) */
     ULONG                   ahb_BreakMask;
     APTR                    ahb_ErrnoPtr;
     STRPTR                  ahb_DefaultUserAgent;

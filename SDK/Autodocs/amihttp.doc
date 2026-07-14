@@ -13,7 +13,7 @@ amihttp.library/DisposeHttpTransaction
 amihttp.library/DisposeHttpUrl
 amihttp.library/FlushHttpCookieJar
 amihttp.library/GetHttpCookieString
-amihttp.library/HttpBaseTagList
+amihttp.library/HttpBaseTagsA
 amihttp.library/HttpBaseTags
 amihttp.library/HttpConnectionGetStatusCode
 amihttp.library/HttpConnectionGetStatusLine
@@ -66,7 +66,7 @@ amihttp.library/HttpUrlEncode
 amihttp.library/HttpBuildQueryString
 amihttp.library/LoadHttpCookieJar
 amihttp.library/NewHttpCookieJar
-amihttp.library/NewHttpCookieJarTags
+amihttp.library/NewHttpCookieJarA
 amihttp.library/NewHttpSession
 amihttp.library/NewHttpTransaction
 amihttp.library/OpenHttpConnection
@@ -100,7 +100,7 @@ amihttp.library/WaitHttpTransaction
 
    API TIERS
 
-   Tier 0 — HttpBaseTagList / HttpError
+   Tier 0 — HttpBaseTagsA / HttpError
      Per-process defaults (timeouts, pool limits, break mask).
 
    Tier 1 — HttpSession, HttpCookieJar
@@ -329,11 +329,11 @@ amihttp.library/WaitHttpTransaction
    GENERAL INFORMATION
 
    TagItem-based configuration uses SetHttpSessionAttrsA(),
-   SetHttpTransactionAttrsA(), and HttpBaseTagList().  Variadic wrappers
+   SetHttpTransactionAttrsA(), and HttpBaseTagsA().  Variadic wrappers
    HttpBaseTags(), SetHttpSessionAttrs(), and SetHttpTransactionAttrs() are
    provided in <proto/amihttp.h>.
 
-   HTBT_* — HttpBaseTagList (Tier 0)
+   HTBT_* — HttpBaseTagsA (Tier 0)
 
    HTBT_BREAKMASK
        Exec signal mask (e.g. SIGBREAKF_CTRL_C) polled during blocking
@@ -380,19 +380,19 @@ amihttp.library/WaitHttpTransaction
    HTTR_HOST, HTTR_HEADERS, HTTR_CONTENT_LENGTH, HTTR_CHUNKED, HTTR_USERAGENT
 
    SEE ALSO
-       HttpBaseTagList(), SetHttpSessionAttrsA(), SetHttpTransactionAttrsA(),
+       HttpBaseTagsA(), SetHttpSessionAttrsA(), SetHttpTransactionAttrsA(),
        amihttp.library/background
 
-amihttp.library/HttpBaseTagList                 amihttp.library/HttpBaseTagList
+amihttp.library/HttpBaseTagsA                 amihttp.library/HttpBaseTagsA
 
    NAME
-       HttpBaseTagList -- Set per-process library defaults.  (V1)
+       HttpBaseTagsA -- Set per-process library defaults.  (V1)
 
    SYNOPSIS
-       success = HttpBaseTagList(tags);
+       success = HttpBaseTagsA(tags);
        D0                      A0
 
-       LONG HttpBaseTagList(struct TagItem *tags);
+       LONG HttpBaseTagsA(struct TagItem *tags);
 
        success = HttpBaseTags(Tag1, ...);
 
@@ -416,7 +416,7 @@ amihttp.library/WaitHttpTransaction
 amihttp.library/HttpBaseTags                       amihttp.library/HttpBaseTags
 
    NAME
-       HttpBaseTags -- Variadic wrapper for HttpBaseTagList.  (V1)
+       HttpBaseTags -- Variadic wrapper for HttpBaseTagsA.  (V1)
 
    SYNOPSIS
        success = HttpBaseTags(Tag1, ...);
@@ -424,11 +424,11 @@ amihttp.library/WaitHttpTransaction
        LONG HttpBaseTags(ULONG, ...);
 
    FUNCTION
-       Convenience wrapper around HttpBaseTagList().  Defined as a static
+       Convenience wrapper around HttpBaseTagsA().  Defined as a static
        inline in <proto/amihttp.h>.
 
    SEE ALSO
-       HttpBaseTagList(), amihttp.library/tags
+       HttpBaseTagsA(), amihttp.library/tags
 
 amihttp.library/HttpError                           amihttp.library/HttpError
 
@@ -656,7 +656,7 @@ amihttp.library/WaitHttpTransaction
 
    INPUTS
        session - HttpSession handle.
-       jar     - HttpCookieJar from NewHttpCookieJar(), or NULL to clear.
+       jar     - HttpCookieJar from NewHttpCookieJar(TAG_DONE), or NULL to clear.
 
    RESULT
        success - TRUE (1) or FALSE (0).
@@ -2030,40 +2030,27 @@ amihttp.library/WaitHttpTransaction
 amihttp.library/NewHttpCookieJar                 amihttp.library/NewHttpCookieJar
 
    NAME
-       NewHttpCookieJar -- Allocate cookie storage.  (V1)
+       NewHttpCookieJar -- Allocate cookie storage (varargs).  (V1)
+       NewHttpCookieJarA -- Allocate cookie storage (TagItem list).  (V1)
 
    SYNOPSIS
-       jar = NewHttpCookieJar();
-       D0
-
-       struct HttpCookieJar *NewHttpCookieJar(VOID);
-
-   FUNCTION
-       Creates empty cookie jar for HttpSessionAttachCookieJar().
-
-   RESULT
-       jar - handle or NULL.
-
-   SEE ALSO
-       DisposeHttpCookieJar(), HttpSessionAttachCookieJar(), NewHttpCookieJarTags()
-
-amihttp.library/NewHttpCookieJarTags         amihttp.library/NewHttpCookieJarTags
-
-   NAME
-       NewHttpCookieJarTags -- Cookie jar with application hooks.  (V1)
-
-   SYNOPSIS
-       jar = NewHttpCookieJarTags(tags);
+       jar = NewHttpCookieJarA(tags);
        D0                          A0
 
-       struct HttpCookieJar *NewHttpCookieJarTags(struct TagItem *tags);
+       struct HttpCookieJar *NewHttpCookieJarA(struct TagItem *tags);
 
-       jar = HttpCookieJarTags(Tag1, ...);
+       jar = NewHttpCookieJar(Tag1, ...);
+
+       struct HttpCookieJar *NewHttpCookieJar(Tag firstTag, ...);
 
    FUNCTION
-       Creates a cookie-store facade.  When HTCJ_REQUEST_HOOK and/or
-       HTCJ_RESPONSE_HOOK are set, cookies are delegated to the application
-       (e.g. AWeb cookie.c) instead of the internal jar list.
+       Creates a cookie jar for HttpSessionAttachCookieJar().  Pass NULL to
+       NewHttpCookieJarA(), or NewHttpCookieJar(TAG_DONE), for a default jar
+       with no hooks.
+
+       When HTCJ_REQUEST_HOOK and/or HTCJ_RESPONSE_HOOK are set, cookies are
+       delegated to the application (e.g. AWeb cookie.c) instead of the
+       internal jar list.
 
        HTCJ_REQUEST_HOOK — struct HttpHookCookieRequest before send; hook
        returns non-zero and sets hcr_Value to a Cookie header payload
@@ -2080,7 +2067,20 @@ amihttp.library/WaitHttpTransaction
        jar - handle or NULL.
 
    SEE ALSO
-       NewHttpCookieJar(), HttpSessionAttachCookieJar(), struct HttpHookCookieRequest
+       DisposeHttpCookieJar(), HttpSessionAttachCookieJar(),
+       struct HttpHookCookieRequest
+
+amihttp.library/NewHttpCookieJarA         amihttp.library/NewHttpCookieJarA
+
+   NAME
+       NewHttpCookieJarA -- See NewHttpCookieJar.  (V1)
+
+   SYNOPSIS
+       jar = NewHttpCookieJarA(tags);
+       struct HttpCookieJar *NewHttpCookieJarA(struct TagItem *tags);
+
+   SEE ALSO
+       NewHttpCookieJar()
 
 amihttp.library/DisposeHttpCookieJar         amihttp.library/DisposeHttpCookieJar
 

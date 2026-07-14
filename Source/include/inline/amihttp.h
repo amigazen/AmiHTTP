@@ -16,7 +16,7 @@
 /* Bootstrap: OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION) is sufficient.  bsdsocket */
 /* opens on first HTTP use; amisslmaster / OpenAmiSSLTags on first HTTPS use */
 
-#define HttpBaseTagList(tags)    \
+#define HttpBaseTagsA(tags)    \
 ({  \
 	register void *b __asm("a6") = HttpBase;  \
 	register struct TagItem *p0 __asm("a0") = (tags);   \
@@ -24,6 +24,15 @@
 	__asm volatile ("jsr a6@(-30:W);" : "+r"(b), "=r"(r) : "r"(p0) : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
 	r;   \
 })
+
+#ifndef NO_INLINE_STDARG
+#define HttpBaseTags(vargs...)    \
+({  \
+	ULONG _argarray[] = {vargs};   \
+	HttpBaseTagsA(_argarray);   \
+	r;   \
+})
+#endif
 
 #define HttpError()    \
 ({  \
@@ -69,6 +78,15 @@
 	__asm volatile ("jsr a6@(-60:W);" : "+r"(b), "=r"(r) : "r"(p0), "r"(p1) : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
 	r;   \
 })
+
+#ifndef NO_INLINE_STDARG
+#define SetHttpSessionAttrs(session, vargs...)    \
+({  \
+	ULONG _argarray[] = {vargs};   \
+	SetHttpSessionAttrsA((session), _argarray);   \
+	r;   \
+})
+#endif
 
 #define HttpSessionAttachCookieJar(session, jar)    \
 ({  \
@@ -126,6 +144,15 @@
 	__asm volatile ("jsr a6@(-96:W);" : "+r"(b), "=r"(r) : "r"(p0), "r"(p1) : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
 	r;   \
 })
+
+#ifndef NO_INLINE_STDARG
+#define SetHttpTransactionAttrs(txn, vargs...)    \
+({  \
+	ULONG _argarray[] = {vargs};   \
+	SetHttpTransactionAttrsA((txn), _argarray);   \
+	r;   \
+})
+#endif
 
 #define HttpTransactionAddHeader(txn, name, value)    \
 ({  \
@@ -303,7 +330,7 @@
 	register struct HttpSession *p0 __asm("a0") = (session);   \
 	register STRPTR p1 __asm("a1") = (host);   \
 	register ULONG p2 __asm("d0") = (port);   \
-	register BOOL p3 __asm("d1") = (ssl);   \
+	register LONG p3 __asm("d1") = (ssl);   \
 	register APTR r __asm("d0");   \
 	__asm volatile ("jsr a6@(-210:W);" : "+r"(b), "=r"(r) : "r"(p0), "r"(p1), "r"(p2), "r"(p3) : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
 	r;   \
@@ -512,13 +539,23 @@
 
 /* Optional HttpCookieJar (attach via HttpSessionAttachCookieJar). */
 
-#define NewHttpCookieJar()    \
+#define NewHttpCookieJarA(tags)    \
 ({  \
 	register void *b __asm("a6") = HttpBase;  \
+	register struct TagItem *p0 __asm("a0") = (tags);   \
 	register APTR r __asm("d0");   \
-	__asm volatile ("jsr a6@(-342:W);" : "+r"(b), "=r"(r) :  : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
+	__asm volatile ("jsr a6@(-342:W);" : "+r"(b), "=r"(r) : "r"(p0) : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
 	r;   \
 })
+
+#ifndef NO_INLINE_STDARG
+#define NewHttpCookieJar(vargs...)    \
+({  \
+	ULONG _argarray[] = {vargs};   \
+	NewHttpCookieJarA(_argarray);   \
+	r;   \
+})
+#endif
 
 #define DisposeHttpCookieJar(jar)    \
 ({  \
@@ -715,15 +752,6 @@
 	r;   \
 })
 
-#define NewHttpCookieJarTags(tags)    \
-({  \
-	register void *b __asm("a6") = HttpBase;  \
-	register struct TagItem *p0 __asm("a0") = (tags);   \
-	register APTR r __asm("d0");   \
-	__asm volatile ("jsr a6@(-468:W);" : "+r"(b), "=r"(r) : "r"(p0) : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
-	r;   \
-})
-
 #define HttpTransactionGetCipher(txn, buf, buflen)    \
 ({  \
 	register void *b __asm("a6") = HttpBase;  \
@@ -731,7 +759,7 @@
 	register STRPTR p1 __asm("a1") = (buf);   \
 	register ULONG p2 __asm("d0") = (buflen);   \
 	register APTR r __asm("d0");   \
-	__asm volatile ("jsr a6@(-474:W);" : "+r"(b), "=r"(r) : "r"(p0), "r"(p1), "r"(p2) : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
+	__asm volatile ("jsr a6@(-468:W);" : "+r"(b), "=r"(r) : "r"(p0), "r"(p1), "r"(p2) : "d0", "d1", "a0", "a1", "fp0", "fp1", "cc", "memory");    \
 	r;   \
 })
 

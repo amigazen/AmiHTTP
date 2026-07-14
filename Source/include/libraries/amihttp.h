@@ -67,7 +67,7 @@ struct ParsedUrl;
 #define ERROR_HTTP_DECODE               8716
 
 /****************************************************************************/
-/* HttpBaseTagList tags (Tier 0 - per-process / per-library defaults)         */
+/* HttpBaseTagsA tags (Tier 0 - per-process / per-library defaults)         */
 /****************************************************************************/
 
 #define HTBT_BREAKMASK              (TAG_USER + 0x01)
@@ -291,7 +291,7 @@ struct HttpHookPostStream
 };
 
 /*
- * NewHttpCookieJarTags — HTCJ_REQUEST_HOOK / HTCJ_RESPONSE_HOOK.
+ * NewHttpCookieJarA — HTCJ_REQUEST_HOOK / HTCJ_RESPONSE_HOOK.
  * When either hook is set the jar does not store cookies internally; the
  * application owns policy and persistence (AWeb cookie.c).
  */
@@ -386,7 +386,7 @@ struct HttpHeader
 };
 
 /****************************************************************************/
-/* NewHttpCookieJarTags tags                                                  */
+/* NewHttpCookieJarA tags                                                  */
 /****************************************************************************/
 
 #define HTCJ_REQUEST_HOOK           (TAG_USER + 0x400)
@@ -405,7 +405,8 @@ struct HttpQueryPair
 
 /****************************************************************************/
 /* HttpBaseTags / SetHttpSessionAttrs / SetHttpTransactionAttrs /             */
-/* HttpCookieJarTags are static inline wrappers in <proto/amihttp.h>.         */
+/* NewHttpCookieJar are tagcall or inline wrappers from SFD ==varargs.        */
+/* NewHttpCookieJarA(NULL) or NewHttpCookieJar(TAG_DONE) for a default jar. */
 /****************************************************************************/
 
 #endif /* LIBRARIES_AMIHTTP_H */

@@ -25,14 +25,14 @@
 extern struct AmiHttpBase *HttpBase;
 
 LONG
-__ASM__ __SAVE_DS__ HttpBaseTagList(
+__ASM__ __SAVE_DS__ HttpBaseTagsA(
     __REG__(a0, struct TagItem *tags),
     __REG__(a6, struct AmiHttpBase *libbase))
 {
     struct TagItem *t;
 
     ht_lvo_bind(libbase);
-    htDbgPut("HttpBaseTagList");
+    htDbgPut("HttpBaseTagsA");
     if (HttpBase == NULL) {
         return ht_lvo_status(ERROR_HTTP_INVALID_HANDLE);
     }
