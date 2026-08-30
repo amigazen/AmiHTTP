@@ -176,6 +176,17 @@ ht_host_match(STRPTR a, STRPTR b)
     return (BOOL)(*a == '\0' && *b == '\0');
 }
 
+static struct HtConnection *
+ht_conn_from_active_node(struct Node *n)
+{
+    if (n == NULL) {
+        return NULL;
+    }
+    /* hc_ActiveNode is the second Node in HtConnection, not the first. */
+    return (struct HtConnection *)((UBYTE *)n -
+        (ULONG)&((struct HtConnection *)0L)->hc_ActiveNode);
+}
+
 static VOID
 ht_pool_active_add(struct AmiHttpBase *base, struct HtConnection *conn)
 {
@@ -206,22 +217,24 @@ ht_pool_active_host_count(struct AmiHttpBase *base, ULONG owner,
     STRPTR host, ULONG port, BOOL ssl)
 {
     struct HtConnection *c;
-    ULONG n;
+    struct Node *n;
+    ULONG count;
 
-    n = 0UL;
-    for (c = (struct HtConnection *)base->ahb_ActiveList.lh_Head;
-         c != NULL && c->hc_ActiveNode.ln_Succ != NULL;
-         c = (struct HtConnection *)c->hc_ActiveNode.ln_Succ) {
-        if (!c->hc_InUse || c->hc_OwnerSerial != owner ||
+    count = 0UL;
+    for (n = base->ahb_ActiveList.lh_Head;
+         n != NULL && n->ln_Succ != NULL;
+         n = n->ln_Succ) {
+        c = ht_conn_from_active_node(n);
+        if (c == NULL || !c->hc_InUse || c->hc_OwnerSerial != owner ||
             c->hc_Port != port || c->hc_IsSsl != ssl ||
             c->hc_Host == NULL) {
             continue;
         }
         if (ht_host_match(c->hc_Host, host)) {
-            n++;
+            count++;
         }
     }
-    return n;
+    return count;
 }
 
 struct HtConnection *
@@ -467,43 +480,62 @@ ht_pool_release(struct AmiHttpBase *base, struct HtConnection *conn, BOOL keepal
 }
 
 VOID
-ht_pool_flush(struct AmiHttpBase *base)
+ht_pool_flush_owner(struct AmiHttpBase *base, ULONG owner)
 {
     struct HtConnection *conn;
-    struct HtConnection *next;
+    struct HtConnection *conn_next;
+    struct List kill;
+    struct Node *n;
+    struct Node *nnext;
 
     if (base == NULL) {
         return;
     }
+    NewList(&kill);
     ObtainSemaphore(&base->ahb_PoolSema);
-    for (conn = (struct HtConnection *)base->ahb_PoolList.lh_Head;
-         conn != NULL && conn->hc_Node.ln_Succ != NULL;
-         conn = next) {
-        next = (struct HtConnection *)conn->hc_Node.ln_Succ;
-        Remove(&conn->hc_Node);
-        ht_connection_free(base, conn);
+    conn = (struct HtConnection *)base->ahb_PoolList.lh_Head;
+    while (conn != NULL && conn->hc_Node.ln_Succ != NULL) {
+        conn_next = (struct HtConnection *)conn->hc_Node.ln_Succ;
+        if (owner == 0 || conn->hc_OwnerSerial == owner) {
+            Remove(&conn->hc_Node);
+            AddTail(&kill, &conn->hc_Node);
+        }
+        conn = conn_next;
+    }
+    n = base->ahb_ActiveList.lh_Head;
+    while (n != NULL && n->ln_Succ != NULL) {
+        nnext = n->ln_Succ;
+        conn = ht_conn_from_active_node(n);
+        if (conn != NULL && (owner == 0 || conn->hc_OwnerSerial == owner)) {
+            Remove(n);
+            conn->hc_InUse = FALSE;
+            AddTail(&kill, &conn->hc_Node);
+        }
+        n = nnext;
     }
     ReleaseSemaphore(&base->ahb_PoolSema);
+    while ((conn = (struct HtConnection *)RemHead(&kill)) != NULL) {
+        ht_connection_free(base, conn);
+    }
+}
+
+VOID
+ht_pool_flush(struct AmiHttpBase *base)
+{
+    /* owner==0: every idle/active connection (library shutdown). */
+    ht_pool_flush_owner(base, 0UL);
 }
 
 VOID
 ht_pool_shutdown(struct AmiHttpBase *base)
 {
-    struct HtConnection *conn;
-    struct HtConnection *next;
-
     if (base == NULL) {
         return;
     }
-    ObtainSemaphore(&base->ahb_PoolSema);
-    for (conn = (struct HtConnection *)base->ahb_PoolList.lh_Head;
-         conn != NULL && conn->hc_Node.ln_Succ != NULL;
-         conn = next) {
-        next = (struct HtConnection *)conn->hc_Node.ln_Succ;
-        Remove(&conn->hc_Node);
-        ht_connection_free(base, conn);
-    }
-    ReleaseSemaphore(&base->ahb_PoolSema);
+    /* Drop idle + active sockets first (outside PoolSema — see ht_pool_flush).
+     * CloseSocket uses each connection's hc_SocketBase so main-task CloseLib
+     * can drain Httptask fds safely. */
+    ht_pool_flush(base);
     ht_transport_task_bsd_shutdown(base);
     ht_transport_task_ssl_shutdown(base);
     ht_transport_global_shutdown(base);

@@ -8,6 +8,10 @@
  * AWeb retrieve subprocesses bind an Opentcp() handle via HTBT_TASK_SOCKETBASE;
  * standalone clients (AGet) lazily open a handle on first I/O.
  *
+ * Socket I/O uses SAS/C stubs with a local parameter named SocketBase (same
+ * pattern as awebamitcp.c) so parallel Httptasks do not serialize on
+ * ahb_SocketSema.  That sema is only for non-reentrant gethostbyname.
+ *
  * --- TLS connect path: DO NOT CHANGE (verified AGet HTTPS, Jun 2026) ---
  *
  * ht_transport_connect(ssl): wrap TlsTaskAttach + TlsAttachSocket in
@@ -48,6 +52,24 @@ extern int h_errno;
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 
+/* Forward decls: defined later; used from apply_timeouts before their bodies. */
+static LONG ht_sb_socket(struct Library *SocketBase, LONG domain, LONG type,
+    LONG proto);
+static LONG ht_sb_close(struct Library *SocketBase, LONG sock);
+static LONG ht_sb_connect(struct Library *SocketBase, LONG sock,
+    struct sockaddr *sa, LONG len);
+static LONG ht_sb_send(struct Library *SocketBase, LONG sock, char *buf,
+    LONG len, LONG flags);
+static LONG ht_sb_recv(struct Library *SocketBase, LONG sock, char *buf,
+    LONG len, LONG flags);
+static LONG ht_sb_setsockopt(struct Library *SocketBase, LONG sock, LONG level,
+    LONG optname, char *optval, LONG optlen);
+static LONG ht_task_bsd_activate(struct AmiHttpBase *base);
+static struct hostent *ht_sb_gethostbyname_r(struct Library *SocketBase,
+    char *host, struct hostent *he, char *buf, ULONG buflen, LONG *herr);
+static struct hostent *ht_sb_gethostbyname(struct Library *SocketBase,
+    char *host);
+
 #include <libraries/bsdsocket.h>
 #include <proto/bsdsocket.h>
 
@@ -70,6 +92,7 @@ ht_transport_apply_timeouts(struct AmiHttpBase *base, LONG sock, ULONG secs)
     struct timeval tv;
     LONG tlen;
     LONG rc;
+    struct Library *SocketBase;
 
     if (base == NULL || sock < 0) {
         return;
@@ -77,16 +100,21 @@ ht_transport_apply_timeouts(struct AmiHttpBase *base, LONG sock, ULONG secs)
     if (secs == 0) {
         secs = HT_SOCKET_IO_TIMEOUT;
     }
-    tv.tv_sec = (long)secs;
-    tv.tv_usec = 0;
-    tlen = (LONG)sizeof(tv);
-    rc = ht_io_obtain(base);
+    rc = ht_task_bsd_activate(base);
     if (rc != 0) {
         return;
     }
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, tlen);
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (char *)&tv, tlen);
-    ht_io_release(base);
+    SocketBase = ht_task_current_socket_base(base);
+    if (SocketBase == NULL) {
+        return;
+    }
+    tv.tv_sec = (long)secs;
+    tv.tv_usec = 0;
+    tlen = (LONG)sizeof(tv);
+    ht_sb_setsockopt(SocketBase, sock, SOL_SOCKET, SO_RCVTIMEO,
+        (char *)&tv, tlen);
+    ht_sb_setsockopt(SocketBase, sock, SOL_SOCKET, SO_SNDTIMEO,
+        (char *)&tv, tlen);
 }
 
 /*
@@ -109,20 +137,26 @@ ht_transport_clear_io_timeouts(struct AmiHttpBase *base, LONG sock)
     struct timeval tv;
     LONG tlen;
     LONG rc;
+    struct Library *SocketBase;
 
     if (base == NULL || sock < 0) {
+        return;
+    }
+    rc = ht_task_bsd_activate(base);
+    if (rc != 0) {
+        return;
+    }
+    SocketBase = ht_task_current_socket_base(base);
+    if (SocketBase == NULL) {
         return;
     }
     tv.tv_sec = 0;
     tv.tv_usec = 0;
     tlen = (LONG)sizeof(tv);
-    rc = ht_io_obtain(base);
-    if (rc != 0) {
-        return;
-    }
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, tlen);
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (char *)&tv, tlen);
-    ht_io_release(base);
+    ht_sb_setsockopt(SocketBase, sock, SOL_SOCKET, SO_RCVTIMEO,
+        (char *)&tv, tlen);
+    ht_sb_setsockopt(SocketBase, sock, SOL_SOCKET, SO_SNDTIMEO,
+        (char *)&tv, tlen);
 }
 
 static BOOL ht_has_gethost_r;
@@ -183,10 +217,12 @@ static VOID
 ht_task_bsd_configure(struct HtTaskBsd *tb)
 {
     struct TagItem tags[3];
+    struct Library *SocketBase;
 
     if (tb == NULL || tb->tb_SocketBase == NULL) {
         return;
     }
+    SocketBase = tb->tb_SocketBase;
     tags[0].ti_Tag = SBTM_SETVAL(SBTC_ERRNOPTR(sizeof(errno)));
     tags[0].ti_Data = (ULONG)&tb->tb_Errno;
     tags[1].ti_Tag = SBTM_SETVAL(SBTC_HERRNOLONGPTR);
@@ -200,6 +236,8 @@ ht_task_bsd_configure(struct HtTaskBsd *tb)
 static LONG
 ht_task_bsd_open_owned(struct HtTaskBsd *tb)
 {
+    struct Library *SocketBase;
+
     if (tb == NULL) {
         return ERROR_HTTP_CONNECT_FAILED;
     }
@@ -216,12 +254,12 @@ ht_task_bsd_open_owned(struct HtTaskBsd *tb)
 }
 
 static VOID
-ht_socket_probe_api(VOID)
+ht_socket_probe_api(struct Library *SocketBase)
 {
     struct TagItem tags[2];
     ULONG have_r;
 
-    if (ht_has_gethost_r) {
+    if (ht_has_gethost_r || SocketBase == NULL) {
         return;
     }
     have_r = 0;
@@ -269,7 +307,7 @@ ht_task_bsd_activate(struct AmiHttpBase *base)
     }
     ht_active_task_bsd = tb;
     ht_sync_io_bases(base, tb);
-    ht_socket_probe_api();
+    ht_socket_probe_api(tb->tb_SocketBase);
     ReleaseSemaphore(&ht_task_bsd_sema);
     return 0;
 }
@@ -355,7 +393,7 @@ ht_transport_task_bsd_bind(struct AmiHttpBase *base, struct Library *socketbase)
     SocketBase = socketbase;
     ht_task_bsd_configure(tb);
     ObtainSemaphore(&base->ahb_SocketSema);
-    ht_socket_probe_api();
+    ht_socket_probe_api(socketbase);
     ReleaseSemaphore(&base->ahb_SocketSema);
     return 0;
 }
@@ -407,9 +445,12 @@ ht_transport_task_bsd_shutdown(struct AmiHttpBase *base)
     struct HtTaskBsd *tb;
     struct HtTaskBsd *next;
     struct Library *sock;
+    struct Task *self;
     BOOL owned;
+    BOOL same_task;
 
     ht_task_bsd_list_init();
+    self = FindTask(NULL);
     ObtainSemaphore(&ht_task_bsd_sema);
     for (tb = (struct HtTaskBsd *)ht_task_bsd_list.lh_Head;
          tb != NULL && tb->tb_Node.ln_Succ != NULL;
@@ -417,9 +458,16 @@ ht_transport_task_bsd_shutdown(struct AmiHttpBase *base)
         next = (struct HtTaskBsd *)tb->tb_Node.ln_Succ;
         sock = tb->tb_SocketBase;
         owned = tb->tb_Owned;
+        same_task = (BOOL)(tb->tb_Task == self);
         Remove(&tb->tb_Node);
         ReleaseSemaphore(&ht_task_bsd_sema);
-        if (owned && sock != NULL) {
+        /*
+         * AmiTCP/Roadshow: CloseLibrary(bsdsocket) must run on the same Exec
+         * task that opened it.  AWeb Httptask subprocesses open their own
+         * handles; closing them from the main task on exit crashes.  Dead
+         * tasks' sockets are reclaimed with the process — leak the Library *.
+         */
+        if (owned && sock != NULL && same_task) {
             CloseLibrary(sock);
         }
         ht_free(tb);
@@ -435,10 +483,29 @@ ht_transport_task_bsd_shutdown(struct AmiHttpBase *base)
 VOID
 ht_io_release(struct AmiHttpBase *base)
 {
+    (void)base;
     ht_active_task_bsd = NULL;
-    if (base != NULL) {
-        ReleaseSemaphore(&base->ahb_SocketSema);
+}
+
+/*
+ * WaitSelect on this task's bsdsocket.  Local SocketBase feeds SAS/C
+ * #pragma libcall A6 (awebamitcp.c pattern) so parallel Httptasks do not
+ * serialize on ahb_SocketSema / one global base.
+ * Do NOT pass HTBT_BREAKMASK — it wedges WaitSelect on several stacks.
+ */
+LONG
+ht_wait_select(struct AmiHttpBase *base, int nfds,
+    void *readfds, void *writefds, void *exceptfds,
+    struct timeval *timeout)
+{
+    struct Library *SocketBase;
+
+    SocketBase = ht_task_current_socket_base(base);
+    if (SocketBase == NULL) {
+        return -1;
     }
+    return WaitSelect(nfds, (fd_set *)readfds, (fd_set *)writefds,
+        (fd_set *)exceptfds, timeout, NULL);
 }
 
 static APTR
@@ -459,28 +526,71 @@ ht_errno_slot(struct AmiHttpBase *base)
     return (APTR)&errno;
 }
 
+/*
+ * Ensure per-task bsdsocket is open.  Does NOT hold ahb_SocketSema — holding
+ * it across connect/WaitSelect serialized AWeb image fetches (Aminet 8/8
+ * queue stall, 8706 storms).
+ */
 LONG
 ht_io_obtain(struct AmiHttpBase *base)
 {
-    LONG rc;
-
-    /*
-     * Pairs with ht_io_release().  TLS attach/wait paths rely on ObtainSemaphore
-     * + ht_task_bsd_activate() so WaitSelect/send/recv use the correct handle.
-     * Do not release the sema before attach-only work completes (see ssl block
-     * in ht_transport_connect).
-     */
     if (base == NULL) {
         return ERROR_HTTP_INVALID_HANDLE;
     }
-    ObtainSemaphore(&base->ahb_SocketSema);
-    rc = ht_task_bsd_activate(base);
-    if (rc != 0) {
-        ht_active_task_bsd = NULL;
-        ReleaseSemaphore(&base->ahb_SocketSema);
-        return rc;
-    }
-    return 0;
+    return ht_task_bsd_activate(base);
+}
+
+/* Parameter name SocketBase is required for SAS/C bsdsocket pragmas (A6). */
+static LONG
+ht_sb_socket(struct Library *SocketBase, LONG domain, LONG type, LONG proto)
+{
+    return (LONG)socket((int)domain, (int)type, (int)proto);
+}
+
+static LONG
+ht_sb_close(struct Library *SocketBase, LONG sock)
+{
+    return (LONG)CloseSocket((int)sock);
+}
+
+static LONG
+ht_sb_connect(struct Library *SocketBase, LONG sock,
+    struct sockaddr *sa, LONG len)
+{
+    return (LONG)connect((int)sock, sa, (int)len);
+}
+
+static LONG
+ht_sb_send(struct Library *SocketBase, LONG sock, char *buf, LONG len, LONG flags)
+{
+    return (LONG)send((int)sock, buf, (int)len, (int)flags);
+}
+
+static LONG
+ht_sb_recv(struct Library *SocketBase, LONG sock, char *buf, LONG len, LONG flags)
+{
+    return (LONG)recv((int)sock, buf, (int)len, (int)flags);
+}
+
+static LONG
+ht_sb_setsockopt(struct Library *SocketBase, LONG sock, LONG level, LONG optname,
+    char *optval, LONG optlen)
+{
+    return (LONG)setsockopt((int)sock, (int)level, (int)optname, optval,
+        (int)optlen);
+}
+
+static struct hostent *
+ht_sb_gethostbyname_r(struct Library *SocketBase, char *host,
+    struct hostent *he, char *buf, ULONG buflen, LONG *herr)
+{
+    return gethostbyname_r(host, he, buf, buflen, herr);
+}
+
+static struct hostent *
+ht_sb_gethostbyname(struct Library *SocketBase, char *host)
+{
+    return gethostbyname(host);
 }
 
 static LONG
@@ -570,26 +680,28 @@ ht_socket_stream(struct AmiHttpBase *base)
     LONG sock;
     LONG fd;
     LONG rc;
+    struct Library *SocketBase;
 
-    rc = ht_io_obtain(base);
+    rc = ht_task_bsd_activate(base);
     if (rc != 0) {
         return rc;
     }
-    sock = socket(AF_INET, SOCK_STREAM, 0);
+    SocketBase = ht_task_current_socket_base(base);
+    if (SocketBase == NULL) {
+        return ERROR_HTTP_CONNECT_FAILED;
+    }
+    sock = ht_sb_socket(SocketBase, AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        ht_io_release(base);
         return sock;
     }
     if (sock == 0) {
-        fd = socket(AF_INET, SOCK_STREAM, 0);
-        CloseSocket(sock);
+        fd = ht_sb_socket(SocketBase, AF_INET, SOCK_STREAM, 0);
+        ht_sb_close(SocketBase, sock);
         if (fd < 0) {
-            ht_io_release(base);
             return fd;
         }
         sock = fd;
     }
-    ht_io_release(base);
     return sock;
 }
 
@@ -599,34 +711,58 @@ ht_lookup_host_ipv4(struct AmiHttpBase *base, STRPTR host, struct hostent *he,
 {
     struct hostent *hent;
     LONG rc;
+    char *ap;
+    char **alist;
+    struct Library *SocketBase;
 
     if (host == NULL || host[0] == '\0' || he == NULL || hbuf == NULL) {
         return NULL;
     }
-    rc = ht_io_obtain(base);
+    rc = ht_task_bsd_activate(base);
     if (rc != 0) {
         return NULL;
     }
+    SocketBase = ht_task_current_socket_base(base);
+    if (SocketBase == NULL) {
+        return NULL;
+    }
+    /*
+     * DNS under ahb_SocketSema with this task's SocketBase in A6.  Parallel
+     * lookups without the base caused mass 8701 on Aminet image bursts.
+     */
+    ObtainSemaphore(&base->ahb_SocketSema);
     hent = NULL;
     if (ht_has_gethost_r) {
         if (herr_out != NULL) {
             *herr_out = 0;
         }
-        hent = gethostbyname_r((char *)host, he, hbuf,
+        hent = ht_sb_gethostbyname_r(SocketBase, (char *)host, he, hbuf,
             (ULONG)HT_HOSTENT_BUF, herr_out);
+        if (hent == NULL || hent->h_addr_list == NULL ||
+            hent->h_addr_list[0] == NULL || hent->h_addrtype != AF_INET) {
+            hent = NULL;
+        }
     } else {
-        hent = gethostbyname((char *)host);
+        hent = ht_sb_gethostbyname(SocketBase, (char *)host);
+        if (hent == NULL || hent->h_addr_list == NULL ||
+            hent->h_addr_list[0] == NULL || hent->h_addrtype != AF_INET ||
+            hent->h_length <= 0 || hent->h_length > 16) {
+            hent = NULL;
+        } else {
+            ap = hbuf;
+            CopyMem(hent->h_addr_list[0], ap, (ULONG)hent->h_length);
+            he->h_name = NULL;
+            he->h_aliases = NULL;
+            he->h_addrtype = AF_INET;
+            he->h_length = hent->h_length;
+            alist = (char **)(hbuf + 16);
+            alist[0] = ap;
+            alist[1] = NULL;
+            he->h_addr_list = alist;
+            hent = he;
+        }
     }
-    if (hent == NULL || hent->h_addr_list == NULL ||
-        hent->h_addr_list[0] == NULL) {
-        ht_io_release(base);
-        return NULL;
-    }
-    if (hent->h_addrtype != AF_INET) {
-        ht_io_release(base);
-        return NULL;
-    }
-    ht_io_release(base);
+    ReleaseSemaphore(&base->ahb_SocketSema);
     return hent;
 }
 
@@ -643,6 +779,7 @@ ht_tcp_connect(struct AmiHttpBase *base, LONG sock, struct hostent *hent,
     struct sockaddr_in sad;
     LONG result;
     LONG rc;
+    struct Library *SocketBase;
 
     (void)timeout_secs;
 
@@ -655,13 +792,18 @@ ht_tcp_connect(struct AmiHttpBase *base, LONG sock, struct hostent *hent,
     sad.sin_port = htons((UWORD)port);
     CopyMem(hent->h_addr_list[0], (APTR)&sad.sin_addr, (ULONG)hent->h_length);
 
-    rc = ht_io_obtain(base);
+    rc = ht_task_bsd_activate(base);
     if (rc != 0) {
         return rc;
     }
+    SocketBase = ht_task_current_socket_base(base);
+    if (SocketBase == NULL) {
+        return ERROR_HTTP_CONNECT_FAILED;
+    }
     ht_socket_clear_errno(base);
-    result = connect(sock, (struct sockaddr *)&sad, sizeof(sad));
-    ht_io_release(base);
+    /* Blocking connect on this task's SocketBase — no ahb_SocketSema. */
+    result = ht_sb_connect(SocketBase, sock, (struct sockaddr *)&sad,
+        (LONG)sizeof(sad));
     if (result == 0) {
         return 0;
     }
@@ -669,25 +811,37 @@ ht_tcp_connect(struct AmiHttpBase *base, LONG sock, struct hostent *hent,
 }
 
 static VOID
-ht_transport_close_socket(struct AmiHttpBase *base, LONG sock)
+ht_transport_close_socket(struct AmiHttpBase *base, LONG sock,
+    struct Library *sockbase)
 {
     struct linger lg;
     LONG lglen;
-    LONG rc;
+    struct Library *SocketBase;
 
     if (sock < 0) {
         return;
     }
-    rc = ht_io_obtain(base);
-    if (rc != 0) {
+    /*
+     * Prefer the creating task's bsdsocket handle.  Pool flush / CloseLib run
+     * on AWeb's main task; CloseSocket must still target the Library that
+     * issued the fd (AmiTCP is per-task).
+     */
+    SocketBase = sockbase;
+    if (SocketBase == NULL) {
+        if (ht_task_bsd_activate(base) != 0) {
+            return;
+        }
+        SocketBase = ht_task_current_socket_base(base);
+    }
+    if (SocketBase == NULL) {
         return;
     }
     lg.l_onoff = 1;
     lg.l_linger = 0;
     lglen = (LONG)sizeof(lg);
-    setsockopt(sock, SOL_SOCKET, SO_LINGER, (char *)&lg, &lglen);
-    CloseSocket(sock);
-    ht_io_release(base);
+    ht_sb_setsockopt(SocketBase, sock, SOL_SOCKET, SO_LINGER,
+        (char *)&lg, lglen);
+    ht_sb_close(SocketBase, sock);
 }
 
 LONG
@@ -735,7 +889,7 @@ ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
     }
     rc = ht_tcp_connect(base, sock, hent, port, timeout_secs);
     if (rc != 0) {
-        ht_transport_close_socket(base, sock);
+        ht_transport_close_socket(base, sock, ht_task_current_socket_base(base));
         return rc;
     }
     /*
@@ -748,6 +902,7 @@ ht_transport_connect(struct AmiHttpBase *base, struct HtConnection *conn,
     }
 
     conn->hc_Sock = sock;
+    conn->hc_SocketBase = ht_task_current_socket_base(base);
     conn->hc_IsSsl = ssl;
     conn->hc_Port = port;
     if (conn->hc_Host) {
@@ -808,9 +963,10 @@ ht_transport_disconnect(struct AmiHttpBase *base, struct HtConnection *conn)
         conn->hc_SslTaskHeld = FALSE;
     }
     if (conn->hc_Sock >= 0) {
-        ht_transport_close_socket(base, conn->hc_Sock);
+        ht_transport_close_socket(base, conn->hc_Sock, conn->hc_SocketBase);
         conn->hc_Sock = -1;
     }
+    conn->hc_SocketBase = NULL;
     conn->hc_IoLen = 0;
     conn->hc_IoPos = 0;
 }
@@ -823,6 +979,7 @@ ht_transport_send(struct AmiHttpBase *base, struct HtConnection *conn,
     LONG total;
     LONG n;
     LONG rc;
+    struct Library *SocketBase;
 
     if (base == NULL || conn == NULL || data == NULL || len == 0) {
         return ERROR_HTTP_INVALID_HANDLE;
@@ -851,19 +1008,25 @@ ht_transport_send(struct AmiHttpBase *base, struct HtConnection *conn,
         }
         return total;
     }
-    rc = ht_io_obtain(base);
-    if (rc != 0) {
-        return rc;
+    SocketBase = conn->hc_SocketBase;
+    if (SocketBase == NULL) {
+        rc = ht_task_bsd_activate(base);
+        if (rc != 0) {
+            return rc;
+        }
+        SocketBase = ht_task_current_socket_base(base);
+    }
+    if (SocketBase == NULL) {
+        return ERROR_HTTP_WRITE_FAILED;
     }
     while ((ULONG)total < len) {
-        n = send(conn->hc_Sock, (char *)data + total, (int)(len - (ULONG)total), 0);
+        n = ht_sb_send(SocketBase, conn->hc_Sock, (char *)data + total,
+            (LONG)(len - (ULONG)total), 0);
         if (n <= 0) {
-            ht_io_release(base);
             return ERROR_HTTP_WRITE_FAILED;
         }
         total += n;
     }
-    ht_io_release(base);
     sent = total;
     return sent;
 }
@@ -877,6 +1040,19 @@ ht_transport_raw_recv(struct AmiHttpBase *base, struct HtConnection *conn,
     LONG nfds;
     LONG rc;
     LONG n;
+    struct Library *SocketBase;
+
+    SocketBase = conn->hc_SocketBase;
+    if (SocketBase == NULL) {
+        rc = ht_task_bsd_activate(base);
+        if (rc != 0) {
+            return -(LONG)rc;
+        }
+        SocketBase = ht_task_current_socket_base(base);
+    }
+    if (SocketBase == NULL) {
+        return -(LONG)ERROR_HTTP_INVALID_HANDLE;
+    }
 
     if (timeout_secs > 0) {
         FD_ZERO(&rfds);
@@ -884,29 +1060,19 @@ ht_transport_raw_recv(struct AmiHttpBase *base, struct HtConnection *conn,
         nfds = conn->hc_Sock + 1;
         tv.tv_sec = (long)timeout_secs;
         tv.tv_usec = 0;
-        rc = ht_io_obtain(base);
-        if (rc != 0) {
-            return -(LONG)rc;
-        }
-        rc = WaitSelect((int)nfds, &rfds, NULL, NULL, &tv, NULL);
-        ht_io_release(base);
+        /* WaitSelect via ht_wait_select (task SocketBase, no socket sema). */
+        rc = ht_wait_select(base, (int)nfds, &rfds, NULL, NULL, &tv);
         if (rc <= 0) {
             return -(LONG)ERROR_HTTP_READ_TIMEOUT;
         }
     }
-    rc = ht_io_obtain(base);
-    if (rc != 0) {
-        return -(LONG)rc;
-    }
-    n = recv(conn->hc_Sock, (char *)buf, (int)len, 0);
+    n = ht_sb_recv(SocketBase, conn->hc_Sock, (char *)buf, (LONG)len, 0);
     if (n < 0) {
-        ht_io_release(base);
         return -(LONG)ERROR_HTTP_READ_FAILED;
     }
     if ((ULONG)n > len) {
         n = (LONG)len;
     }
-    ht_io_release(base);
     return n;
 }
 
@@ -938,6 +1104,7 @@ ht_transport_conn_idle(struct AmiHttpBase *base, struct HtConnection *conn)
     struct timeval tv;
     LONG nfds;
     LONG rc;
+    struct Library *SocketBase;
 
     if (conn == NULL || conn->hc_Sock < 0) {
         return TRUE;
@@ -952,12 +1119,17 @@ ht_transport_conn_idle(struct AmiHttpBase *base, struct HtConnection *conn)
     tv.tv_sec = 0;
     tv.tv_usec = 0;
     nfds = conn->hc_Sock + 1;
-    rc = ht_io_obtain(base);
-    if (rc != 0) {
+    SocketBase = conn->hc_SocketBase;
+    if (SocketBase == NULL) {
+        if (ht_task_bsd_activate(base) != 0) {
+            return FALSE;
+        }
+        SocketBase = ht_task_current_socket_base(base);
+    }
+    if (SocketBase == NULL) {
         return FALSE;
     }
     rc = WaitSelect((int)nfds, &rfds, NULL, &efds, &tv, NULL);
-    ht_io_release(base);
     if (rc != 0) {
         return FALSE;
     }

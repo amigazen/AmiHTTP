@@ -100,7 +100,16 @@ __ASM__ __SAVE_DS__ HttpBaseTagsA(
             }
             break;
         case HTBT_POOL_FLUSH:
-            ht_pool_flush(HttpBase);
+            /*
+             * Httptask exit must not CloseSocket other tasks' pooled fds
+             * (AmiTCP crash on Freeobject).  Flush only this task's owner
+             * unless ti_Data is non-zero (full flush from AWeb Freehttp).
+             */
+            if (t->ti_Data != 0) {
+                ht_pool_flush(HttpBase);
+            } else {
+                ht_pool_flush_owner(HttpBase, (ULONG)FindTask(NULL));
+            }
             break;
         case HTBT_DEFAULT_TIMEOUT:
             HttpBase->ahb_DefaultTimeout = (ULONG)t->ti_Data;

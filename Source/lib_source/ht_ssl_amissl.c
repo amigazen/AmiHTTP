@@ -664,7 +664,7 @@ ht_ssl_do_connect(struct AmiHttpBase *base, SSL *ssl, LONG sock,
         nfds = sock + 1;
         tv.tv_sec = (long)timeout_secs;
         tv.tv_usec = 0;
-        rc = WaitSelect((int)nfds, &rfds, NULL, &wfds, &tv, NULL);
+        rc = ht_wait_select(base, (int)nfds, &rfds, NULL, &wfds, &tv);
         if (rc <= 0) {
             ht_io_release(base);
             return ERROR_HTTP_CONNECT_TIMEOUT;
@@ -800,7 +800,7 @@ ht_ssl_recv(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
             nfds = sock + 1;
             tv.tv_sec = (long)timeout_secs;
             tv.tv_usec = 0;
-            rc = WaitSelect((int)nfds, &rfds, NULL, &wfds, &tv, NULL);
+            rc = ht_wait_select(base, (int)nfds, &rfds, NULL, &wfds, &tv);
             if (rc <= 0) {
                 rv = HT_IO_ERROR(ERROR_HTTP_READ_TIMEOUT);
                 goto done;
@@ -834,7 +834,7 @@ ht_ssl_recv(struct AmiHttpBase *base, struct HtSsl *s, LONG sock,
                 nfds = sock + 1;
                 tv.tv_sec = (long)timeout_secs;
                 tv.tv_usec = 0;
-                rc = WaitSelect((int)nfds, NULL, &wfds, NULL, &tv, NULL);
+                rc = ht_wait_select(base, (int)nfds, NULL, &wfds, NULL, &tv);
                 if (rc <= 0) {
                     rv = HT_IO_ERROR(ERROR_HTTP_READ_TIMEOUT);
                     goto done;

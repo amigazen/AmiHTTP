@@ -291,6 +291,11 @@ LONG ht_ensure_bsdsocket(struct AmiHttpBase *base);
 VOID ht_transport_bind_socket(struct AmiHttpBase *base);
 LONG ht_io_obtain(struct AmiHttpBase *base);
 VOID ht_io_release(struct AmiHttpBase *base);
+/* WaitSelect on this task's bsdsocket (explicit SocketBase; no socket sema).
+ * Break mask is intentionally NOT passed (see ht_transport.c). */
+LONG ht_wait_select(struct AmiHttpBase *base, int nfds,
+    void *readfds, void *writefds, void *exceptfds,
+    struct timeval *timeout);
 LONG ht_transport_task_bsd_bind(struct AmiHttpBase *base, struct Library *socketbase);
 APTR ht_task_errno_ptr(struct AmiHttpBase *base);
 struct Library *ht_task_current_socket_base(struct AmiHttpBase *base);
@@ -350,6 +355,8 @@ struct HtConnection *ht_pool_acquire(struct AmiHttpBase *base,
 VOID ht_pool_release(struct AmiHttpBase *base, struct HtConnection *conn,
     BOOL keepalive);
 VOID ht_pool_flush(struct AmiHttpBase *base);
+/* Flush pool/active entries for one OwnerSerial (FindTask). 0 = all. */
+VOID ht_pool_flush_owner(struct AmiHttpBase *base, ULONG owner);
 VOID ht_pool_shutdown(struct AmiHttpBase *base);
 VOID ht_timer_shutdown(VOID);
 BOOL ht_timer_get_time(struct timeval *tv);
