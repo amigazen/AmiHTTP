@@ -10,7 +10,7 @@
 
 #define HT_LIB_VERSION   1
 #define HT_LIB_REVISION  0
-#define HT_BUILD_ID      20260707L
-#define HT_BUILD_ID_STR  "20260707"
+#define HT_BUILD_ID      20260902L
+#define HT_BUILD_ID_STR  "20260902"
 
 #endif /* AMIHTTP_PRIVATE_HT_BUILD_H */

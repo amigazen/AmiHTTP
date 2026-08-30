@@ -206,10 +206,10 @@ ht_ssl_wait_socket(struct AmiHttpBase *base, LONG sock, BOOL want_write,
     if (rc != 0) {
         return ERROR_HTTP_READ_TIMEOUT;
     }
-    rc = WaitSelect((int)nfds,
+    rc = ht_wait_select(base, (int)nfds,
         want_write ? NULL : &rfds,
         want_write ? &wfds : NULL,
-        NULL, &tv, NULL);
+        NULL, &tv);
     ht_io_release(base);
     if (rc <= 0) {
         return ERROR_HTTP_READ_TIMEOUT;
