@@ -93,6 +93,30 @@ struct ParsedUrl;
 #define HTBT_FREE_POOL_MEM          (TAG_USER + 0x0F)
 /* Close idle pooled keep-alive connections (AWeb CloseIdleKeepAliveConnections). */
 #define HTBT_POOL_FLUSH             (TAG_USER + 0x10)
+/* Pointer to struct HtProgress — amihttp writes stage/note with no I/O.
+ * Layout matches AWeb struct AwebDiagHttp so AWebLogDump can read it. */
+#define HTBT_PROGRESS_PTR           (TAG_USER + 0x11)
+
+/* HtProgress.stage values (no DOS; safe while WaitSelect is wedged). */
+#define HTPROG_IDLE                 0
+#define HTPROG_PERFORM              1
+#define HTPROG_DNS_ENTER            2
+#define HTPROG_DNS_LEAVE            3
+#define HTPROG_CONNECT              4
+#define HTPROG_CONNECTED            5
+#define HTPROG_SEND                 6
+#define HTPROG_RECV_HDR             7
+#define HTPROG_WAITSELECT           8
+#define HTPROG_RECV_BODY            9
+#define HTPROG_DONE                 10
+
+struct HtProgress
+{
+    volatile ULONG stage;
+    volatile ULONG task;
+    volatile ULONG eclk;
+    char note[80];
+};
 
 /****************************************************************************/
 /* SetHttpSessionAttrsA tags (Tier 1)                                         */

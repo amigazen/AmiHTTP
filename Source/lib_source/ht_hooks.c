@@ -20,6 +20,32 @@
 
 extern struct AmiHttpBase *HttpBase;
 
+/*
+ * Write stage/note into the optional HTBT_PROGRESS_PTR block.  No DOS,
+ * no Wait, no semaphore — safe to call from inside WaitSelect-prone paths
+ * so an external AWebLogDump can see where Perform is stuck.
+ */
+VOID
+ht_progress(struct AmiHttpBase *base, ULONG stage, STRPTR note)
+{
+    struct HtProgress *p;
+    ULONG i;
+    STRPTR src;
+
+    if (base == NULL || base->ahb_Progress == NULL) {
+        return;
+    }
+    p = base->ahb_Progress;
+    p->stage = stage;
+    p->task = (ULONG)FindTask(NULL);
+    p->eclk = 0;
+    src = note ? note : (STRPTR)"";
+    for (i = 0; i < sizeof(p->note) - 1 && src[i]; i++) {
+        p->note[i] = src[i];
+    }
+    p->note[i] = '\0';
+}
+
 static VOID
 ht_hook_call(struct HttpTransaction *txn, ULONG hooktype, APTR object, APTR message)
 {

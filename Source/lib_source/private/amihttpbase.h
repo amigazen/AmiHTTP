@@ -24,6 +24,8 @@
 #include <exec/semaphores.h>
 #endif
 
+struct HtProgress; /* libraries/amihttp.h */
+
 struct AmiHttpBase
 {
     struct Library          ahb_LibNode;
@@ -70,6 +72,9 @@ struct AmiHttpBase
     /* Library-wide error state */
     LONG                    ahb_LastError;
     UBYTE                   ahb_ErrorString[256];
+
+    /* Optional hang-diag progress block (HTBT_PROGRESS_PTR); no I/O. */
+    struct HtProgress      *ahb_Progress; /* libraries/amihttp.h */
 };
 
 #endif /* AMIHTTP_AMIHTTPBASE_H */

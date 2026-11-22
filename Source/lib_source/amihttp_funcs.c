@@ -114,6 +114,9 @@ __ASM__ __SAVE_DS__ HttpBaseTagsA(
         case HTBT_DEFAULT_TIMEOUT:
             HttpBase->ahb_DefaultTimeout = (ULONG)t->ti_Data;
             break;
+        case HTBT_PROGRESS_PTR:
+            HttpBase->ahb_Progress = (struct HtProgress *)t->ti_Data;
+            break;
         default:
             break;
         }
