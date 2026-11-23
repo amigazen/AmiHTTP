@@ -100,24 +100,28 @@ amihttp.library/WaitHttpTransaction
 
    API TIERS
 
+   Tiers are use cases, not a mandatory ladder.  HttpBaseTagsA (Tier 0) is
+   optional for a one-shot request.  Similar split appears in other HTTP
+   clients (e.g. libcurl easy vs multi, session vs raw connection).
+
    Tier 0 — HttpBaseTagsA / HttpError
-     Per-process defaults (timeouts, pool limits, break mask).
+     Optional library-base defaults (timeouts, pool limits, break mask,
+     errno pointer, task socket bind).  Not required for a minimal GET.
 
    Tier 1 — HttpSession, HttpCookieJar
-     Persistent client settings shared by many requests (User-Agent, proxy,
-     redirect policy, optional cookie jar).
+     Session-based reuse: durable settings shared across many requests
+     (User-Agent, proxy, cookies, timeouts, TLS verify, keep-alive).
 
-   Tier 2 — HttpTransaction  (primary API)
-     Complete request/response cycle: wget, browser page load, REST, AJAX.
+   Tier 2 — HttpTransaction  (primary / one-shot request API)
+     Complete request/response cycle: wget, page load, REST, AJAX.
      HttpTransactionPerform sends the request and parses response headers.
-     HttpTransactionReadBody streams the entity body in caller-supplied
-     buffers.
+     HttpTransactionReadBody streams the entity body in caller buffers.
 
    Tier 3 — HttpConnection
-     Low-level streaming connection for WebDAV, custom protocols, or
-     incremental wire I/O.  Simple GET/PUT should use Tier 2.
+     Streaming / low-level wire I/O (WebDAV, custom protocols).  Simple
+     GET/PUT should use Tier 2.
 
-   TYPICAL TIER 2 FLOW
+   TYPICAL TIER 2 FLOW  (HttpBaseTagsA not required)
 
    HttpBase = OpenLibrary(AMIHTTPNAME, AMIHTTPVERSION);
    session = NewHttpSession();
@@ -142,28 +146,64 @@ amihttp.library/WaitHttpTransaction
        HTTA_NOTIFY_SIGNAL, signal,
        TAG_DONE);
    HttpTransactionPerformAsync(txn);
-   while (!HttpTransactionIsComplete(txn))
-       WaitHttpTransaction(txn, 1);
+   WaitHttpTransaction(txn, 0);   /* Wait() on notify signal; no poll needed */
    FreeSignal(signal);
    /* then ReadBody loop as above */
+
+   STRING ENCODING
+
+   Library string APIs treat data as NUL-terminated opaque octets (C
+   strings).  There is no charset conversion layer.
+
+   - HTTP methods and header *names* should be ASCII (HTTP).
+   - Header values, URLs, and percent-encoding are byte-oriented.
+     HttpUrlEncode/HttpUrlDecode map bytes to/from %XX with no Unicode
+     interpretation.  Example: HttpUrlDecode("%CF%80") returns the two
+     bytes 0xCF 0x80 (UTF-8 for U+03C0 if the caller treats the result as
+     UTF-8; two Latin-1 code units if not).
+   - For non-ASCII URL path/query on the wire, supply a URL that is already
+     correctly formed for HTTP (typically ASCII + percent-encoded UTF-8
+     octets), the same practice modern clients use.
+   - AmigaDOS paths (cookie files, CA bundle paths, TO= files in examples)
+     use the host filesystem / locale charset.
+   - Location redirect values are stored and returned as received header
+     octets; HttpTransactionGetRedirectLocation() does not remap UTF-8 to
+     Latin-1.
 
    OWNERSHIP AND LIFETIME
 
    - DisposeHttpSession only after all child HttpTransaction and
      HttpConnection handles are disposed.
    - STRPTR values from HttpTransactionGetStatusLine(),
-     HttpTransactionRespHeader(), HttpTransactionGetRedirectLocation(), and
+     HttpTransactionRespHeader(), HttpTransactionRespHeaderNext(),
+     HttpTransactionGetRedirectLocation(), and
      HttpTransactionRespHeaders() are library-owned until
      DisposeHttpTransaction().  Do not free them.
    - Tier 3 header accessors are valid until CloseHttpConnection().
+   - Heap strings returned by BuildHttpUrl(), HttpUrlEncode(),
+     HttpUrlDecode(), HttpPathEncode(), HttpBuildQueryString(),
+     HttpUri*Part(), HttpJoinUri(), and GetHttpCookieString() are allocated
+     by the library.  Free them with:
+
+       HttpBaseTags(HTBT_FREE_POOL_MEM, (ULONG)str, TAG_DONE);
+
+     Do not FreeVec() or guess FreeMem sizes; the allocator may change.
 
    ERROR MODEL
 
-   HttpTransactionGetLastError() and HttpError() report transport and
-   protocol failures (ERROR_HTTP_*).  HttpTransactionGetStatusCode() reports
-   the HTTP wire status (200, 404, 304, etc.).  A successful Perform with
-   HTTP 404 is not a library error — check the status code separately.
-   See amihttp.library/errors.
+   HttpError() / SetHttpError() use the shared library base last-error
+   slot (AmiHttpBase).  On classic Amiga, OpenLibrary() returns that shared
+   base for all openers in the system — calling OpenLibrary from each task
+   does not give each task a private HttpError() or HttpBaseTagsA state.
+
+   HttpTransactionGetLastError() is per-transaction.  After Perform,
+   ReadBody, and other txn LVOs, prefer GetLastError().  Use HttpError()
+   for base/session helpers or when no transaction handle exists.
+   Transaction failure paths update the txn slot and usually the base slot.
+
+   HttpTransactionGetStatusCode() is the HTTP wire status (200, 404, …).
+   A successful Perform with HTTP 404 is not a library error — check the
+   status code separately.  See amihttp.library/errors.
 
    REQUIREMENTS
 
@@ -246,7 +286,7 @@ amihttp.library/WaitHttpTransaction
 
    SEE ALSO
        HttpError(), HttpGetErrorString(), HttpFault(), SetHttpError(),
-       HTBT_ERRNOPTR
+       HttpTransactionGetLastError()
 
 amihttp.library/hooks                             amihttp.library/hooks
 
@@ -341,11 +381,41 @@ amihttp.library/WaitHttpTransaction
        HTTA_NOTIFY_SIGNAL used for async completion.
 
    HTBT_ERRNOPTR
-       Pointer to ULONG receiving a copy of HttpError() on failure.
+       Pointer to the calling task's TCP errno integer (bsdsocket-style),
+       used by the socket stack and TLS backends.  Not a mirror of
+       HttpError() / ERROR_HTTP_* codes.
 
    HTBT_DEFAULT_USERAGENT, HTBT_DEFAULT_PROXY, HTBT_DEFAULT_TIMEOUT
    HTBT_MAX_IDLE_CONNECTIONS, HTBT_IDLE_TIMEOUT, HTBT_SSL_VERIFY
-       Process-wide defaults.  HTBT_SSL_VERIFY uses HTSSL_VERIFY_* values.
+   HTBT_CA_BUNDLE_PATH
+       Library-base defaults on the shared AmiHttpBase.  HTBT_SSL_VERIFY
+       uses HTSSL_VERIFY_* values.  HTBT_CA_BUNDLE_PATH is a PEM path for
+       VERIFY_PEER (especially amitls builds).
+
+   HTBT_TASK_SOCKETBASE
+       Bind this Exec task to a caller-owned bsdsocket.library base (AWeb
+       Opentcp pattern).  Required when multiple tasks perform I/O: do not
+       share one SocketBase across tasks.
+
+   HTBT_TASK_SOCKET_RELEASE
+       Release the calling task's bound SocketBase association.
+
+   HTBT_TASK_SSL_RELEASE
+       Drop per-task TLS runtime state for the calling Exec task (pair with
+       TASK_SOCKET_RELEASE on task exit).
+
+   HTBT_FREE_POOL_MEM
+       Free a heap string previously returned by library allocators
+       (BuildHttpUrl, HttpUrlEncode/Decode, HttpUri*Part, HttpJoinUri,
+       GetHttpCookieString, etc.).  ti_Data is the STRPTR to free.
+
+   HTBT_POOL_FLUSH
+       Close idle keep-alive pool connections.  ti_Data 0 = flush only
+       connections owned by the calling task; non-zero = full flush.
+
+   HTBT_PROGRESS_PTR
+       Optional pointer to struct HtProgress for hang diagnosis (stage/note
+       with no DOS I/O).  See <libraries/amihttp.h>.
 
    HTBT_LOG_HOOK, HTBT_HTTP2_ENABLED — reserved for v2.
 
@@ -356,9 +426,11 @@ amihttp.library/WaitHttpTransaction
    HTSA_KEEPALIVE, HTSA_MAX_CONNECTIONS
    HTSA_CONNECT_TIMEOUT, HTSA_READ_TIMEOUT, HTSA_TOTAL_TIMEOUT
    HTSA_SSL_CIPHER_LIST, HTSA_SSL_VERIFY, HTSA_SSL_CERT_HOOK
-   HTSA_COOKIE_JAR, HTSA_TASK_SERIAL
-       Task serial partitions the connection pool (stable ULONG, not task
-       pointer).  HTSA_REFERER_POLICY: HTRP_NEVER, HTRP_ORIGIN, HTRP_ALWAYS.
+   HTSA_CA_BUNDLE_PATH, HTSA_COOKIE_JAR, HTSA_TASK_SERIAL
+       HTSA_TASK_SERIAL partitions the connection pool by a stable ULONG
+       (often the task pointer cast to ULONG, or an app-chosen id — not a
+       live Task* dereference).  Default NewHttpSession uses FindTask(NULL).
+       HTSA_REFERER_POLICY: HTRP_NEVER, HTRP_ORIGIN, HTRP_ALWAYS.
 
    HTSA_PROXY_PAC_URL, HTSA_ALPN — reserved for v2.
 
@@ -399,16 +471,18 @@ amihttp.library/WaitHttpTransaction
        LONG HttpBaseTags(ULONG, ...);
 
    FUNCTION
-       Configures process-wide defaults after OpenLibrary().  Tags are
-       HTBT_* values; see amihttp.library/tags.
+       Configures library-base defaults after OpenLibrary().  Tags are
+       HTBT_* values; see amihttp.library/tags.  Optional — not required for
+       a minimal Tier 2 request.  State lives on the shared AmiHttpBase
+       returned by OpenLibrary() (not per OpenLibrary call / not per task).
 
    INPUTS
        tags - TagItem array terminated with TAG_DONE, or variadic TAG_DONE
            list for HttpBaseTags().
 
    RESULT
-       success - TRUE (1) on success, FALSE (0) on failure.  Call HttpError()
-           when FALSE.
+       success - TRUE (1) / FALSE (0) as LONG (classic Amiga TagList style).
+           Call HttpError() when FALSE.  Unknown tags are ignored.
 
    SEE ALSO
        HttpError(), amihttp.library/tags, HttpBaseTags()
@@ -442,16 +516,20 @@ amihttp.library/WaitHttpTransaction
        LONG HttpError(VOID);
 
    FUNCTION
-       Returns the most recent ERROR_HTTP_* code for this process.  Cleared
-       to 0 on successful LVO calls.  Use HTBT_ERRNOPTR to mirror errors to
-       a caller-owned ULONG automatically.
+       Returns the most recent ERROR_HTTP_* code stored on the shared
+       library base (AmiHttpBase).  Cleared to 0 on many successful LVO
+       calls.  This is not per-Exec-task and not isolated by calling
+       OpenLibrary() again from another task.
+
+       Distinct from HTBT_ERRNOPTR (TCP errno for bsdsocket/TLS) and from
+       HttpTransactionGetLastError() (per-transaction ERROR_HTTP_*).
 
    RESULT
        code - 0 if no error, otherwise ERROR_HTTP_* value.
 
    SEE ALSO
        SetHttpError(), HttpGetErrorString(), HttpFault(),
-       amihttp.library/errors
+       HttpTransactionGetLastError(), amihttp.library/errors
 
 amihttp.library/SetHttpError                     amihttp.library/SetHttpError
 
@@ -465,8 +543,9 @@ amihttp.library/WaitHttpTransaction
        LONG SetHttpError(LONG code);
 
    FUNCTION
-       Sets the library-wide error code (for example after application-level
-       validation).  Returns the previous code.
+       Sets the shared library-base error code (for example after
+       application-level validation).  Returns the previous code.  Same
+       storage as HttpError() — not per-task.
 
    INPUTS
        code - new ERROR_HTTP_* value, or 0 to clear.
@@ -512,8 +591,16 @@ amihttp.library/WaitHttpTransaction
        LONG HttpFault(LONG code, STRPTR header, STRPTR buffer, LONG buflen);
 
    FUNCTION
-       Formats a human-readable error line similar to dos.library Fault().
-       Useful for printing to stderr or requester text.
+       Formats a human-readable error line similar to dos.library Fault():
+       optional "header: " prefix plus catalog text for code.  Also sets
+       HttpError() to code.  Useful for stderr or requester text.
+
+       Like dos.library Fault(), catalog messages are short by convention:
+       the message portion (without header) is never longer than 60
+       characters (+1 for NUL).  Callers may size the buffer as
+       strlen(header) + 2 + 80 to hold a full line without truncation
+       loops.  If buflen is too small, the result is truncated and len is
+       the number of characters written (not the full required length).
 
    INPUTS
        code   - ERROR_HTTP_* value.
@@ -522,7 +609,8 @@ amihttp.library/WaitHttpTransaction
        buflen - size of buffer in bytes.
 
    RESULT
-       len - length of formatted string, or 0 on failure.
+       len - length of string written into buffer (may be truncated), or 0
+           when code is 0, buffer is NULL, or buflen <= 0.
 
    SEE ALSO
        HttpError(), HttpGetErrorString()
@@ -1075,18 +1163,23 @@ amihttp.library/WaitHttpTransaction
            STRPTR, STRPTR);
 
    FUNCTION
-       Returns the next field-value for name after prev_value.  Use
-       HttpTransactionRespHeader() for the first value, then loop with
-       prev set to each returned pointer until NULL.  Required for multiple
-       Set-Cookie lines without walking struct HttpHeader nodes.
+       Walks duplicate field-values for one header name only (e.g. multiple
+       Set-Cookie lines).  It does not enumerate all headers like
+       dos.library ExNext() — use HttpTransactionRespHeaderByIndex() for
+       that.
+
+       Typical loop: first = HttpTransactionRespHeader(txn, name); then
+       call HttpTransactionRespHeaderNext(txn, name, prev) with each
+       returned pointer as prev until NULL.  Values are library-owned.
 
    INPUTS
        txn  - HttpTransaction after Perform.
        name - header name (case-insensitive).
-       prev - previous value from this name, or NULL for the first entry.
+       prev - previous value pointer for this name (pointer identity), or
+           NULL to start after the first match from RespHeader.
 
    RESULT
-       value - next header value, or NULL when exhausted.
+       value - next header value for name, or NULL when exhausted.
 
    SEE ALSO
        HttpTransactionRespHeader(), HttpTransactionRespHeaderByIndex()
@@ -1171,8 +1264,9 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpTransactionGetRedirectLocation(struct HttpTransaction *);
 
    FUNCTION
-       Returns redirect URL from Location header when status is 3xx.
-       Library-owned until DisposeHttpTransaction().
+       Returns the Location header value when status is 3xx, as received on
+       the wire (opaque octets; no charset remapping).  Library-owned until
+       DisposeHttpTransaction().
 
    INPUTS
        txn - HttpTransaction after Perform.
@@ -1181,7 +1275,8 @@ amihttp.library/WaitHttpTransaction
        url - STRPTR or NULL.
 
    SEE ALSO
-       HttpTransactionGetStatusCode(), HTSA_FOLLOW_REDIRECTS
+       HttpTransactionGetStatusCode(), HTSA_FOLLOW_REDIRECTS,
+       amihttp.library STRING ENCODING (overview)
 
 amihttp.library/HttpTransactionGetContentLength
                               amihttp.library/HttpTransactionGetContentLength
@@ -1280,8 +1375,10 @@ amihttp.library/WaitHttpTransaction
        LONG HttpTransactionGetLastError(struct HttpTransaction *);
 
    FUNCTION
-       Returns last ERROR_HTTP_* for this transaction.  Separate from HTTP
-       status code.
+       Returns last ERROR_HTTP_* recorded for this transaction (Perform,
+       ReadBody, and other txn failure paths).  Prefer this over HttpError()
+       after transaction LVOs.  Separate from HTTP status code
+       (HttpTransactionGetStatusCode).
 
    INPUTS
        txn - HttpTransaction handle.
@@ -1290,7 +1387,7 @@ amihttp.library/WaitHttpTransaction
        code - ERROR_HTTP_* or 0.
 
    SEE ALSO
-       HttpError(), HttpTransactionGetStatusCode()
+       HttpError(), HttpTransactionGetStatusCode(), HttpTransactionReadBody()
 
 amihttp.library/SetHttpTransactionHook     amihttp.library/SetHttpTransactionHook
 
@@ -1516,9 +1613,10 @@ amihttp.library/WaitHttpTransaction
            ULONG buflen);
 
    FUNCTION
-       Copies status line into caller buffer after
-       HttpConnectionReadResponseHeaders().  Does not read from wire by
-       itself.
+       Copies the already-buffered HTTP status line into the caller buffer
+       after HttpConnectionReadResponseHeaders().  Despite the name, this
+       LVO does not perform socket I/O; wire reading happens in
+       HttpConnectionReadResponseHeaders() / HttpConnectionRead().
 
    INPUTS
        conn   - HttpConnection after ReadResponseHeaders.
@@ -1790,7 +1888,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR BuildHttpUrl(struct ParsedUrl *url);
 
    FUNCTION
-       Allocates canonical URL string.  Caller frees with dos Free().
+       Allocates canonical URL string (opaque octets).  Free with
+       HttpBaseTags(HTBT_FREE_POOL_MEM, (ULONG)str, TAG_DONE).
 
    INPUTS
        url - populated ParsedUrl.
@@ -1799,7 +1898,7 @@ amihttp.library/WaitHttpTransaction
        str - allocated STRPTR or NULL.
 
    SEE ALSO
-       ParseHttpUrl(), HttpJoinUri()
+       ParseHttpUrl(), HttpJoinUri(), HTBT_FREE_POOL_MEM
 
 amihttp.library/HttpUrlEncode                     amihttp.library/HttpUrlEncode
 
@@ -1813,17 +1912,18 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUrlEncode(STRPTR string);
 
    FUNCTION
-       application/x-www-form-urlencoded style encoding.  Caller frees
-       result with Free().
+       Byte-oriented percent-encoding (application/x-www-form-urlencoded
+       style).  Each non-unreserved octet becomes %XX; no charset
+       conversion.  Free with HTBT_FREE_POOL_MEM.
 
    INPUTS
-       string - input text.
+       string - input octets (NUL-terminated).
 
    RESULT
        str - encoded string or NULL.
 
    SEE ALSO
-       HttpUrlDecode(), HttpPathEncode()
+       HttpUrlDecode(), HttpPathEncode(), amihttp.library STRING ENCODING
 
 amihttp.library/HttpUrlDecode                     amihttp.library/HttpUrlDecode
 
@@ -1837,10 +1937,11 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUrlDecode(STRPTR string);
 
    FUNCTION
-       Decodes %XX sequences.  Caller frees with Free().
+       Decodes %XX sequences to raw octets.  No charset conversion — e.g.
+       "%CF%80" yields bytes 0xCF 0x80.  Free with HTBT_FREE_POOL_MEM.
 
    SEE ALSO
-       HttpUrlEncode()
+       HttpUrlEncode(), amihttp.library STRING ENCODING
 
 amihttp.library/HttpPathEncode                   amihttp.library/HttpPathEncode
 
@@ -1854,7 +1955,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpPathEncode(STRPTR path);
 
    FUNCTION
-       Encodes path for use in URL.  Caller frees with Free().
+       Byte-oriented path encoding for use in a URL.  Free with
+       HTBT_FREE_POOL_MEM.
 
    SEE ALSO
        HttpUrlEncode()
@@ -1872,7 +1974,7 @@ amihttp.library/WaitHttpTransaction
 
    FUNCTION
        Walks struct List of struct HttpQueryPair nodes and builds
-       name=value&name=value string.  Caller frees with Free().
+       name=value&name=value string.  Free with HTBT_FREE_POOL_MEM.
 
    INPUTS
        pairs - list of HttpQueryPair (hqp_Name, hqp_Value).
@@ -1881,7 +1983,7 @@ amihttp.library/WaitHttpTransaction
        str - query string without leading '?', or NULL.
 
    SEE ALSO
-       struct HttpQueryPair, HttpUrlEncode()
+       struct HttpQueryPair, HttpUrlEncode(), HTBT_FREE_POOL_MEM
 
 amihttp.library/HttpUriSchemePart             amihttp.library/HttpUriSchemePart
 
@@ -1895,7 +1997,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUriSchemePart(STRPTR url);
 
    FUNCTION
-       Returns allocated scheme (e.g. "http", "https").  Caller Free().
+       Returns a newly allocated scheme string (e.g. "http", "https"), not
+       a pointer into url.  Free with HTBT_FREE_POOL_MEM.
 
    SEE ALSO
        HttpUriHostPart(), HttpUriPathPart(), ParseHttpUrl()
@@ -1912,7 +2015,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUriHostPart(STRPTR url);
 
    FUNCTION
-       Returns allocated host portion.  Caller Free().
+       Returns a newly allocated host string (not a substring of url).
+       Free with HTBT_FREE_POOL_MEM.
 
    SEE ALSO
        HttpUriAuthorityPart()
@@ -1929,7 +2033,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUriPathPart(STRPTR url);
 
    FUNCTION
-       Returns path including leading slash.  Caller Free().
+       Returns allocated path including leading slash.  Free with
+       HTBT_FREE_POOL_MEM.
 
    SEE ALSO
        HttpUriFilePart(), HttpUriParentPart()
@@ -1946,7 +2051,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUriFilePart(STRPTR url);
 
    FUNCTION
-       Like dos FilePart() for URLs.  Caller Free().
+       Like dos FilePart() for URLs; returns allocated string.  Free with
+       HTBT_FREE_POOL_MEM.
 
    SEE ALSO
        HttpUriPathPart()
@@ -1963,7 +2069,7 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUriQueryPart(STRPTR url);
 
    FUNCTION
-       Returns query without '?'.  Caller Free().
+       Returns allocated query without '?'.  Free with HTBT_FREE_POOL_MEM.
 
    SEE ALSO
        HttpBuildQueryString()
@@ -1980,7 +2086,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUriParentPart(STRPTR url);
 
    FUNCTION
-       Like dos ParentDir() for URL paths.  Caller Free().
+       Like dos ParentDir() for URL paths; returns allocated string.  Free
+       with HTBT_FREE_POOL_MEM.
 
    SEE ALSO
        HttpUriPathPart()
@@ -1997,7 +2104,7 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpUriAuthorityPart(STRPTR url);
 
    FUNCTION
-       Returns authority component.  Caller Free().
+       Returns allocated authority component.  Free with HTBT_FREE_POOL_MEM.
 
    SEE ALSO
        HttpUriHostPart()
@@ -2014,8 +2121,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR HttpJoinUri(STRPTR base_url, STRPTR relative_url);
 
    FUNCTION
-       RFC 3986 relative resolution (redirect Location, HTML links).  Caller
-       frees result with Free().
+       RFC 3986 relative resolution (redirect Location, HTML links).
+       Operates on opaque URL octets.  Free with HTBT_FREE_POOL_MEM.
 
    INPUTS
        base     - absolute base URL.
@@ -2025,7 +2132,7 @@ amihttp.library/WaitHttpTransaction
        url - allocated absolute URL or NULL.
 
    SEE ALSO
-       ParseHttpUrl(), HttpTransactionPerform()
+       ParseHttpUrl(), HttpTransactionPerform(), HTBT_FREE_POOL_MEM
 
 amihttp.library/NewHttpCookieJar                 amihttp.library/NewHttpCookieJar
 
@@ -2208,8 +2315,8 @@ amihttp.library/WaitHttpTransaction
        STRPTR GetHttpCookieString(struct HttpCookieJar *, STRPTR url);
 
    FUNCTION
-       Builds Cookie: header payload for given request URL.  Caller frees
-       with Free().
+       Builds Cookie: header payload for given request URL.  Free with
+       HttpBaseTags(HTBT_FREE_POOL_MEM, (ULONG)str, TAG_DONE).
 
    INPUTS
        jar - cookie jar.
@@ -2219,4 +2326,4 @@ amihttp.library/WaitHttpTransaction
        str - "name=value; name2=value2" or NULL if none.
 
    SEE ALSO
-       SetHttpCookie(), HttpSessionAttachCookieJar()
+       SetHttpCookie(), HttpSessionAttachCookieJar(), HTBT_FREE_POOL_MEM
